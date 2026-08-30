@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
-import { productionStages, connectionsForPanel, taskProgress, currentBuilds } from "../../data/mockData";
+import { productionStages, connectionsForPanel, taskProgress, currentBuilds, parsePanelQrValue } from "../../data/mockData";
 import { Button, formatNumber } from "../../components/ui";
+import QrScanner from "../../components/QrScanner";
 
 export default function Home() {
   const {
@@ -19,6 +20,8 @@ export default function Home() {
   const [showScanner, setShowScanner] = useState(false);
   const [scannedPanel, setScannedPanel] = useState(null);
   const [selectedStage, setSelectedStage] = useState(null);
+  const [useCamera, setUseCamera] = useState(true);
+  const [scanError, setScanError] = useState("");
 
   const dailyGoal = currentUser.override ?? roleDefaults[currentUser.role].daily;
   const todayHours = workHistory
@@ -39,10 +42,37 @@ export default function Home() {
     setShowScanner(false);
     setScannedPanel(null);
     setSelectedStage(null);
+    setScanError("");
+    setUseCamera(true);
   }
 
   function handleScan(panel) {
     setScannedPanel(panel);
+  }
+
+  // Called with the raw string decoded off a real QR code by the camera —
+  // matched against the same ASSEMBLYOS:PANEL:<id>:JOB:<jobNumber> format
+  // PanelDetailModal prints onto every panel's sticker (see
+  // mockData.panelQrValue / parsePanelQrValue).
+  function handleDetect(raw) {
+    const parsed = parsePanelQrValue(raw);
+    if (!parsed) {
+      setScanError("That QR code isn't an AssemblyOS panel label.");
+      return;
+    }
+    // Prefer an exact (id + job number) match so a repeat build's own
+    // sticker opens THAT build, not just whichever is currently newest;
+    // fall back to the current scannable build for that panel id if the
+    // sticker predates job numbers being encoded.
+    const exact = panels.find((p) => p.id === parsed.id && (!parsed.jobNumber || p.jobNumber === parsed.jobNumber));
+    const fallback = scannablePanels.find((p) => p.id === parsed.id);
+    const match = exact ?? fallback;
+    if (!match) {
+      setScanError(`No panel #${parsed.id} found on the schedule — ask your manager to check the estimate import.`);
+      return;
+    }
+    setScanError("");
+    handleScan(match);
   }
 
   function handleStart() {
@@ -120,25 +150,57 @@ export default function Home() {
 
             {!scannedPanel ? (
               <>
-                <p className="text-sm font-semibold text-ink-900 mb-1">Scanning Panel…</p>
-                <p className="text-[11px] text-ink-500 mb-4">Point camera at the QR code on the panel. (Simulated — pick one below.)</p>
-                {scannablePanels.length === 0 && (
-                  <p className="text-xs text-ink-400 text-center py-6">
-                    No panels yet — ask your manager to import a panel estimate first.
-                  </p>
-                )}
-                <div className="space-y-2">
-                  {scannablePanels.map((p) => (
+                <p className="text-sm font-semibold text-ink-900 mb-1">Scan Panel QR Code</p>
+                <p className="text-[11px] text-ink-500 mb-4">
+                  {useCamera
+                    ? "Point your camera at the QR code printed on the panel."
+                    : "Pick the panel you're working on from the list below."}
+                </p>
+
+                {useCamera ? (
+                  <>
+                    <QrScanner onDetect={handleDetect} onCancel={closeScanner} />
+                    {scanError && <p className="text-[11px] text-bad-600 mt-3">{scanError}</p>}
                     <button
-                      key={p.buildId}
-                      onClick={() => handleScan(p)}
-                      className="w-full flex items-center justify-between rounded-lg border border-paper-200 px-3 py-2.5 text-left hover:border-brand-400"
+                      onClick={() => {
+                        setScanError("");
+                        setUseCamera(false);
+                      }}
+                      className="mt-3 w-full text-center text-[11px] font-semibold text-brand-600"
                     >
-                      <span className="text-sm font-medium text-ink-900">#{p.id}</span>
-                      <span className="text-[11px] text-ink-500">{p.customer}</span>
+                      Camera not working? Pick a panel manually
                     </button>
-                  ))}
-                </div>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => {
+                        setScanError("");
+                        setUseCamera(true);
+                      }}
+                      className="mb-3 text-[11px] font-semibold text-brand-600"
+                    >
+                      ← Use camera instead
+                    </button>
+                    {scannablePanels.length === 0 && (
+                      <p className="text-xs text-ink-400 text-center py-6">
+                        No panels yet — ask your manager to import a panel estimate first.
+                      </p>
+                    )}
+                    <div className="space-y-2">
+                      {scannablePanels.map((p) => (
+                        <button
+                          key={p.buildId}
+                          onClick={() => handleScan(p)}
+                          className="w-full flex items-center justify-between rounded-lg border border-paper-200 px-3 py-2.5 text-left hover:border-brand-400"
+                        >
+                          <span className="text-sm font-medium text-ink-900">#{p.id}</span>
+                          <span className="text-[11px] text-ink-500">{p.customer}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
               </>
             ) : (
               <>

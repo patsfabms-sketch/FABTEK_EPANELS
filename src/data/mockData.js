@@ -221,6 +221,17 @@ export function panelQrValue(panel) {
   return `ASSEMBLYOS:PANEL:${panel.id}:JOB:${panel.jobNumber || ""}`;
 }
 
+// Inverse of panelQrValue — parses a decoded camera scan back into
+// {id, jobNumber}, or null if the code isn't a recognized AssemblyOS panel
+// label (a stray QR code someone points the camera at, a barcode from
+// something else on the shop floor, etc).
+export function parsePanelQrValue(raw) {
+  if (typeof raw !== "string") return null;
+  const match = raw.match(/^ASSEMBLYOS:PANEL:(.+):JOB:([^:]*)$/);
+  if (!match) return null;
+  return { id: match[1], jobNumber: match[2] || "" };
+}
+
 // Stages a technician can pick after scanning a panel's QR code.
 export const productionStages = [
   { key: "verify", label: "Verifying Packout" },
