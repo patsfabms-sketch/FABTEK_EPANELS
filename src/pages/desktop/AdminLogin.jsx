@@ -8,6 +8,11 @@ const STEPS = {
   SET_PASSWORD: "set-password",
 };
 
+const SERVER_ERROR = "Can't reach the server. Check your connection and try again.";
+
+// Every step here round-trips to the shared backend now (a real network
+// call, not an in-memory lookup) — `busy` guards each submit against
+// double-clicks/double-Enter while that's in flight.
 export default function AdminLogin() {
   const { checkAdminUsername, adminLogin, setAdminPasswordAndLogin } = useApp();
   const [step, setStep] = useState(STEPS.USERNAME);
@@ -16,39 +21,56 @@ export default function AdminLogin() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  function submitUsername() {
+  async function submitUsername() {
+    if (busy) return;
     if (!username.trim()) {
       setError("Enter your username.");
       return;
     }
-    const result = checkAdminUsername(username);
-    if (!result.found) {
-      setError("Username not found.");
-      return;
-    }
+    setBusy(true);
     setError("");
-    setPassword("");
-    setConfirmPassword("");
-    if (result.needsSetup) {
-      setPendingAdminId(result.adminId);
-      setStep(STEPS.SET_PASSWORD);
-    } else {
-      setStep(STEPS.PASSWORD);
-    }
-  }
-
-  function submitPassword() {
-    const result = adminLogin(username, password);
-    if (!result.ok) {
-      setError(result.error ?? "Incorrect password.");
+    try {
+      const result = await checkAdminUsername(username);
+      if (result.serverError) {
+        setError(SERVER_ERROR);
+        return;
+      }
+      if (!result.found) {
+        setError("Username not found.");
+        return;
+      }
       setPassword("");
-      return;
+      setConfirmPassword("");
+      if (result.needsSetup) {
+        setPendingAdminId(result.adminId);
+        setStep(STEPS.SET_PASSWORD);
+      } else {
+        setStep(STEPS.PASSWORD);
+      }
+    } finally {
+      setBusy(false);
     }
-    setError("");
   }
 
-  function submitNewPassword() {
+  async function submitPassword() {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await adminLogin(username, password);
+      if (!result.ok) {
+        setError(result.error ?? "Incorrect password.");
+        setPassword("");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitNewPassword() {
+    if (busy) return;
     if (password.length < 6) {
       setError("Password must be at least 6 characters.");
       return;
@@ -59,8 +81,18 @@ export default function AdminLogin() {
       setConfirmPassword("");
       return;
     }
+    setBusy(true);
     setError("");
-    setAdminPasswordAndLogin(pendingAdminId, password);
+    try {
+      const result = await setAdminPasswordAndLogin(pendingAdminId, password);
+      if (!result.ok) {
+        setError(result.error ?? SERVER_ERROR);
+        setPassword("");
+        setConfirmPassword("");
+      }
+    } finally {
+      setBusy(false);
+    }
   }
 
   function goBack() {
@@ -89,18 +121,19 @@ export default function AdminLogin() {
               placeholder="e.g. Pwarren"
               autoCapitalize="none"
               autoFocus
-              className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2.5 text-sm"
+              disabled={busy}
+              className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2.5 text-sm disabled:opacity-60"
             />
             {error && <p className="text-[11px] text-bad-600 mt-2">{error}</p>}
-            <Button className="w-full mt-4 py-2.5" onClick={submitUsername}>
-              Continue
+            <Button className="w-full mt-4 py-2.5" onClick={submitUsername} disabled={busy}>
+              {busy ? "Checking…" : "Continue"}
             </Button>
           </div>
         )}
 
         {step === STEPS.PASSWORD && (
           <div>
-            <button onClick={goBack} className="text-[11px] font-semibold text-brand-600 mb-3">
+            <button onClick={goBack} disabled={busy} className="text-[11px] font-semibold text-brand-600 mb-3 disabled:opacity-50">
               ← Back
             </button>
             <label className="text-xs font-semibold text-ink-500">Password for @{username}</label>
@@ -110,18 +143,19 @@ export default function AdminLogin() {
               onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && submitPassword()}
               autoFocus
-              className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2.5 text-sm"
+              disabled={busy}
+              className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2.5 text-sm disabled:opacity-60"
             />
             {error && <p className="text-[11px] text-bad-600 mt-2">{error}</p>}
-            <Button className="w-full mt-4 py-2.5" onClick={submitPassword}>
-              Log In
+            <Button className="w-full mt-4 py-2.5" onClick={submitPassword} disabled={busy}>
+              {busy ? "Signing in…" : "Log In"}
             </Button>
           </div>
         )}
 
         {step === STEPS.SET_PASSWORD && (
           <div>
-            <button onClick={goBack} className="text-[11px] font-semibold text-brand-600 mb-3">
+            <button onClick={goBack} disabled={busy} className="text-[11px] font-semibold text-brand-600 mb-3 disabled:opacity-50">
               ← Back
             </button>
             <p className="text-[11px] text-ink-500 mb-3">
@@ -133,7 +167,8 @@ export default function AdminLogin() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoFocus
-              className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2.5 text-sm"
+              disabled={busy}
+              className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2.5 text-sm disabled:opacity-60"
             />
             <label className="text-xs font-semibold text-ink-500 mt-3 block">Confirm password</label>
             <input
@@ -141,11 +176,12 @@ export default function AdminLogin() {
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && submitNewPassword()}
-              className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2.5 text-sm"
+              disabled={busy}
+              className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2.5 text-sm disabled:opacity-60"
             />
             {error && <p className="text-[11px] text-bad-600 mt-2">{error}</p>}
-            <Button className="w-full mt-4 py-2.5" onClick={submitNewPassword}>
-              Set Password &amp; Log In
+            <Button className="w-full mt-4 py-2.5" onClick={submitNewPassword} disabled={busy}>
+              {busy ? "Saving…" : "Set Password & Log In"}
             </Button>
           </div>
         )}

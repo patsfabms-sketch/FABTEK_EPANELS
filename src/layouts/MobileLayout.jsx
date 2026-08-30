@@ -2,7 +2,7 @@ import { NavLink, Outlet, useNavigate, Link } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import Login from "../pages/mobile/Login";
 import AdminHome from "../pages/mobile/AdminHome";
-import { SaveErrorBanner } from "../components/ui";
+import { SaveErrorBanner, LoadingScreen } from "../components/ui";
 
 // No "Log Work" tab — work is logged automatically as a byproduct of
 // scanning into a panel and stopping the session (see AppContext.stopSession),
@@ -14,8 +14,10 @@ const TABS = [
 ];
 
 export default function MobileLayout() {
-  const { session, currentUser, currentAdmin, saveError } = useApp();
+  const { session, currentUser, currentAdmin, saveError, ready } = useApp();
   const navigate = useNavigate();
+
+  if (!ready) return <LoadingScreen />;
 
   return (
     // Below the sm breakpoint (a real phone, including this installed as a

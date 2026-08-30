@@ -11,12 +11,19 @@ const STEPS = {
   ADMIN_SET_PASSWORD: "admin-set-password",
 };
 
+const SERVER_ERROR = "Can't reach the server. Check your connection and try again.";
+
 // A username here can belong to either a technician (PIN login) or an admin
 // (password login, same credentials as the desktop manager console) — see
 // AppContext's checkUsername/checkAdminUsername. Trying the technician
 // roster first keeps the common case (a technician's own name also being a
 // substring match for nobody else) simple; falling back to the admin roster
 // is what lets a manager sign into the mobile app too.
+//
+// Every step here now round-trips to the shared backend (a real network
+// call, not an in-memory lookup), so each submit is async and `busy` guards
+// against double-submits — most importantly the 4-digit PIN pad, which
+// auto-advances the instant the 4th digit is tapped.
 export default function Login() {
   const {
     checkUsername,
@@ -35,61 +42,81 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  function submitUsername() {
+  async function submitUsername() {
+    if (busy) return;
     if (!username.trim()) {
       setError("Enter your username.");
       return;
     }
-    const empResult = checkUsername(username);
-    if (empResult.found) {
-      setError("");
-      if (empResult.needsSetup) {
-        setPendingEmployeeId(empResult.employeeId);
-        setStep(STEPS.SET_PIN);
-      } else {
-        setStep(STEPS.PIN);
+    setBusy(true);
+    setError("");
+    try {
+      const empResult = await checkUsername(username);
+      if (empResult.serverError) {
+        setError(SERVER_ERROR);
+        return;
       }
-      return;
-    }
-
-    const adminResult = checkAdminUsername(username);
-    if (adminResult.found) {
-      setError("");
-      setPassword("");
-      setConfirmPassword("");
-      if (adminResult.needsSetup) {
-        setPendingAdminId(adminResult.adminId);
-        setStep(STEPS.ADMIN_SET_PASSWORD);
-      } else {
-        setStep(STEPS.ADMIN_PASSWORD);
+      if (empResult.found) {
+        if (empResult.needsSetup) {
+          setPendingEmployeeId(empResult.employeeId);
+          setStep(STEPS.SET_PIN);
+        } else {
+          setStep(STEPS.PIN);
+        }
+        return;
       }
-      return;
-    }
 
-    setError("Username not found.");
+      const adminResult = await checkAdminUsername(username);
+      if (adminResult.serverError) {
+        setError(SERVER_ERROR);
+        return;
+      }
+      if (adminResult.found) {
+        setPassword("");
+        setConfirmPassword("");
+        if (adminResult.needsSetup) {
+          setPendingAdminId(adminResult.adminId);
+          setStep(STEPS.ADMIN_SET_PASSWORD);
+        } else {
+          setStep(STEPS.ADMIN_PASSWORD);
+        }
+        return;
+      }
+
+      setError("Username not found.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   function pressDigit(d) {
+    if (busy) return;
     if (step === STEPS.PIN && pin.length < 4) setPin((p) => p + d);
     if (step === STEPS.SET_PIN && firstPin.length < 4) setFirstPin((p) => p + d);
     if (step === STEPS.CONFIRM_PIN && pin.length < 4) setPin((p) => p + d);
   }
 
   function backspace() {
+    if (busy) return;
     if (step === STEPS.PIN) setPin((p) => p.slice(0, -1));
     if (step === STEPS.SET_PIN) setFirstPin((p) => p.slice(0, -1));
     if (step === STEPS.CONFIRM_PIN) setPin((p) => p.slice(0, -1));
   }
 
-  function submitPin() {
-    const result = login(username, pin);
-    if (!result.ok) {
-      setError(result.error ?? "Incorrect PIN.");
-      setPin("");
-      return;
-    }
+  async function submitPin() {
+    setBusy(true);
     setError("");
+    try {
+      const result = await login(username, pin);
+      if (!result.ok) {
+        setError(result.error ?? "Incorrect PIN.");
+        setPin("");
+      }
+    } finally {
+      setBusy(false);
+    }
   }
 
   function proceedToConfirm() {
@@ -99,7 +126,7 @@ export default function Login() {
     setStep(STEPS.CONFIRM_PIN);
   }
 
-  function confirmNewPin() {
+  async function confirmNewPin() {
     if (pin !== firstPin) {
       setError("PINs didn't match — try again.");
       setPin("");
@@ -107,20 +134,38 @@ export default function Login() {
       setStep(STEPS.SET_PIN);
       return;
     }
-    setPinAndLogin(pendingEmployeeId, pin);
-  }
-
-  function submitAdminPassword() {
-    const result = adminLogin(username, password);
-    if (!result.ok) {
-      setError(result.error ?? "Incorrect password.");
-      setPassword("");
-      return;
-    }
+    setBusy(true);
     setError("");
+    try {
+      const result = await setPinAndLogin(pendingEmployeeId, pin);
+      if (!result.ok) {
+        setError(result.error ?? SERVER_ERROR);
+        setPin("");
+        setFirstPin("");
+        setStep(STEPS.SET_PIN);
+      }
+    } finally {
+      setBusy(false);
+    }
   }
 
-  function submitAdminNewPassword() {
+  async function submitAdminPassword() {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await adminLogin(username, password);
+      if (!result.ok) {
+        setError(result.error ?? "Incorrect password.");
+        setPassword("");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitAdminNewPassword() {
+    if (busy) return;
     if (password.length < 6) {
       setError("Password must be at least 6 characters.");
       return;
@@ -131,8 +176,18 @@ export default function Login() {
       setConfirmPassword("");
       return;
     }
+    setBusy(true);
     setError("");
-    setAdminPasswordAndLogin(pendingAdminId, password);
+    try {
+      const result = await setAdminPasswordAndLogin(pendingAdminId, password);
+      if (!result.ok) {
+        setError(result.error ?? SERVER_ERROR);
+        setPassword("");
+        setConfirmPassword("");
+      }
+    } finally {
+      setBusy(false);
+    }
   }
 
   function goBackToUsername() {
@@ -149,8 +204,8 @@ export default function Login() {
   // different component's state — doing that synchronously during render is
   // invalid in React and can cascade into a "too many re-renders" loop.
   useEffect(() => {
-    if (step === STEPS.PIN && pin.length === 4) submitPin();
-    if (step === STEPS.CONFIRM_PIN && pin.length === 4) confirmNewPin();
+    if (step === STEPS.PIN && pin.length === 4 && !busy) submitPin();
+    if (step === STEPS.CONFIRM_PIN && pin.length === 4 && !busy) confirmNewPin();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pin, step]);
 
@@ -178,11 +233,12 @@ export default function Login() {
             onKeyDown={(e) => e.key === "Enter" && submitUsername()}
             placeholder="e.g. mvance"
             autoCapitalize="none"
-            className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2.5 text-sm"
+            disabled={busy}
+            className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2.5 text-sm disabled:opacity-60"
           />
           {error && <p className="text-[11px] text-bad-600 mt-2">{error}</p>}
-          <Button className="w-full mt-4 py-3" onClick={submitUsername}>
-            Continue
+          <Button className="w-full mt-4 py-3" onClick={submitUsername} disabled={busy}>
+            {busy ? "Checking…" : "Continue"}
           </Button>
         </div>
       )}
@@ -211,6 +267,7 @@ export default function Login() {
             ))}
           </div>
 
+          {busy && <p className="text-[11px] text-ink-400 mb-3">Checking…</p>}
           {error && <p className="text-[11px] text-bad-600 mb-3">{error}</p>}
 
           <div className="grid grid-cols-3 gap-3 w-full max-w-[260px]">
@@ -218,21 +275,23 @@ export default function Login() {
               <button
                 key={d}
                 onClick={() => pressDigit(String(d))}
-                className="rounded-full aspect-square bg-paper-100 text-lg font-semibold text-ink-900 active:bg-paper-200"
+                disabled={busy}
+                className="rounded-full aspect-square bg-paper-100 text-lg font-semibold text-ink-900 active:bg-paper-200 disabled:opacity-50"
               >
                 {d}
               </button>
             ))}
-            <button onClick={goBackToUsername} className="rounded-full aspect-square text-xs font-semibold text-ink-400">
+            <button onClick={goBackToUsername} disabled={busy} className="rounded-full aspect-square text-xs font-semibold text-ink-400 disabled:opacity-50">
               Back
             </button>
             <button
               onClick={() => pressDigit("0")}
-              className="rounded-full aspect-square bg-paper-100 text-lg font-semibold text-ink-900 active:bg-paper-200"
+              disabled={busy}
+              className="rounded-full aspect-square bg-paper-100 text-lg font-semibold text-ink-900 active:bg-paper-200 disabled:opacity-50"
             >
               0
             </button>
-            <button onClick={backspace} className="rounded-full aspect-square text-sm font-semibold text-ink-400">
+            <button onClick={backspace} disabled={busy} className="rounded-full aspect-square text-sm font-semibold text-ink-400 disabled:opacity-50">
               ⌫
             </button>
           </div>
@@ -241,7 +300,7 @@ export default function Login() {
 
       {step === STEPS.ADMIN_PASSWORD && (
         <div className="w-full">
-          <button onClick={goBackToUsername} className="block text-[11px] font-semibold text-brand-600 mb-3">
+          <button onClick={goBackToUsername} disabled={busy} className="block text-[11px] font-semibold text-brand-600 mb-3 disabled:opacity-50">
             ← Back
           </button>
           <label className="text-xs font-semibold text-ink-500">Password for @{username}</label>
@@ -251,18 +310,19 @@ export default function Login() {
             onChange={(e) => setPassword(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submitAdminPassword()}
             autoFocus
-            className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2.5 text-sm"
+            disabled={busy}
+            className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2.5 text-sm disabled:opacity-60"
           />
           {error && <p className="text-[11px] text-bad-600 mt-2">{error}</p>}
-          <Button className="w-full mt-4 py-3" onClick={submitAdminPassword}>
-            Log In
+          <Button className="w-full mt-4 py-3" onClick={submitAdminPassword} disabled={busy}>
+            {busy ? "Signing in…" : "Log In"}
           </Button>
         </div>
       )}
 
       {step === STEPS.ADMIN_SET_PASSWORD && (
         <div className="w-full">
-          <button onClick={goBackToUsername} className="block text-[11px] font-semibold text-brand-600 mb-3">
+          <button onClick={goBackToUsername} disabled={busy} className="block text-[11px] font-semibold text-brand-600 mb-3 disabled:opacity-50">
             ← Back
           </button>
           <p className="text-[11px] text-ink-500 mb-3">
@@ -275,7 +335,8 @@ export default function Login() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoFocus
-            className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2.5 text-sm"
+            disabled={busy}
+            className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2.5 text-sm disabled:opacity-60"
           />
           <label className="text-xs font-semibold text-ink-500 mt-3 block">Confirm password</label>
           <input
@@ -283,11 +344,12 @@ export default function Login() {
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submitAdminNewPassword()}
-            className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2.5 text-sm"
+            disabled={busy}
+            className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2.5 text-sm disabled:opacity-60"
           />
           {error && <p className="text-[11px] text-bad-600 mt-2">{error}</p>}
-          <Button className="w-full mt-4 py-3" onClick={submitAdminNewPassword}>
-            Set Password &amp; Log In
+          <Button className="w-full mt-4 py-3" onClick={submitAdminNewPassword} disabled={busy}>
+            {busy ? "Saving…" : "Set Password & Log In"}
           </Button>
         </div>
       )}

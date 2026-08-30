@@ -1,7 +1,7 @@
 import { NavLink, Outlet, Link } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import AdminLogin from "../pages/desktop/AdminLogin";
-import { SaveErrorBanner } from "../components/ui";
+import { SaveErrorBanner, LoadingScreen } from "../components/ui";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: DashboardIcon },
@@ -14,8 +14,9 @@ const NAV = [
 ];
 
 export default function DesktopLayout() {
-  const { currentAdmin, adminLogout, saveError } = useApp();
+  const { currentAdmin, adminLogout, saveError, ready } = useApp();
 
+  if (!ready) return <LoadingScreen />;
   if (!currentAdmin) return <AdminLogin />;
 
   return (

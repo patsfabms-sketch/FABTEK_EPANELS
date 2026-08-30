@@ -107,17 +107,35 @@ export function Button({ children, variant = "primary", className = "", ...props
   );
 }
 
-// Shown whenever AppContext's persistence effect fails to write to
-// localStorage (quota exceeded, private browsing, storage disabled) — a
-// failure that used to be swallowed silently, so changes looked saved but
-// weren't. Both the desktop and mobile layout mount this so it's visible no
-// matter where the failure happens.
+// Shown whenever AppContext can't reach the shared AssemblyOS backend
+// (Supabase) — either the initial load or a subsequent read/write failed.
+// A failure here used to be swallowed silently back when this was just a
+// localStorage write; now it means changes on this device may not be
+// visible to anyone else until connectivity is back. Both the desktop and
+// mobile layout mount this so it's visible no matter where the failure
+// happens.
 export function SaveErrorBanner({ saveError }) {
   if (!saveError) return null;
   return (
     <div className="bg-bad-500 text-white text-[12px] font-semibold px-4 py-2 text-center shrink-0">
-      Changes aren't saving — this browser's storage is full or unavailable. Free up space or try a different
-      browser/device before doing more work here, or it may be lost on reload.
+      Can't reach the AssemblyOS server — check your internet connection. Changes made now may not save or show up
+      on other devices until it's back.
+    </div>
+  );
+}
+
+// Shown while AppContext's initial fetch from the shared backend is still
+// in flight. Without this, a device that's already signed in would flash
+// the login screen for a moment (currentAdmin/currentUser both start out
+// unresolved until the roster has actually loaded) before landing on the
+// right screen.
+export function LoadingScreen() {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-paper-50">
+      <div className="w-10 h-10 rounded-xl bg-brand-500 text-white flex items-center justify-center font-bold text-lg animate-pulse">
+        A
+      </div>
+      <p className="text-xs text-ink-400">Loading AssemblyOS…</p>
     </div>
   );
 }

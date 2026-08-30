@@ -14,12 +14,12 @@ function readFileAsText(file) {
 }
 
 // PDF imports carry the original document along with them so it can be
-// opened again later from the panel detail view. The file itself is saved
-// once into IndexedDB (see data/pdfStore.js — NOT localStorage, which is
-// far too small for real PDFs and silently fails once full) and every panel
-// parsed off this one file shares that same saved copy via `pdfId`, rather
-// than each one embedding its own duplicate of the whole document. CSV
-// imports have no source document to attach.
+// opened again later from the panel detail view — from ANY device, not just
+// the one that uploaded it. The file itself is saved once into the shared
+// assemblyos-pdfs Supabase Storage bucket (see data/pdfStore.js) and every
+// panel parsed off this one file shares that same saved copy via `pdfId`,
+// rather than each one embedding its own duplicate of the whole document.
+// CSV imports have no source document to attach.
 async function parseEstimateFile(file) {
   if (file.name.toLowerCase().endsWith(".pdf") || file.type === "application/pdf") {
     const { rows, errors } = await parseEstimatePdf(file);

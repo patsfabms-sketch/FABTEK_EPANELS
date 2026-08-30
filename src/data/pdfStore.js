@@ -1,61 +1,32 @@
 // ---------------------------------------------------------------------------
 // Storage for uploaded estimate PDFs.
 //
-// These used to be embedded as base64 data URLs directly inside the panel
-// records saved to localStorage. That silently broke in practice:
-// localStorage tops out around 5-10MB total per origin, a real scanned/saved
-// PDF can easily be several hundred KB to a few MB once base64-inflated, and
-// every line-item panel parsed off the same PDF was storing its OWN full
-// duplicate copy of it. A handful of imports was enough to blow the quota —
-// and the write failure was swallowed by a try/catch (see AppContext's
-// persistence effect), so nothing ever told anyone it stopped saving.
-//
-// IndexedDB has no such practical ceiling (browsers grant it a share of
-// disk, typically gigabytes) and stores Blobs natively, so the PDF itself
-// lives here, keyed by a generated id — panels just carry that id
-// (`pdfId`), and every panel parsed from the same uploaded file shares the
-// SAME id rather than duplicating the file per panel.
+// These used to live in this browser's IndexedDB, keyed by a generated id —
+// which fixed the original localStorage-quota problem but meant a PDF
+// uploaded on the desktop console was invisible to a technician's phone,
+// since IndexedDB is per-device too. They now live in a Supabase Storage
+// bucket (`assemblyos-pdfs`) shared by every device, keyed the same way:
+// panels carry a generated id (`pdfId`, now the storage object's path), and
+// every panel parsed from the same uploaded file shares the SAME id rather
+// than duplicating the file per panel.
 // ---------------------------------------------------------------------------
 
-const DB_NAME = "assemblyos-files";
-const DB_VERSION = 1;
-const STORE_NAME = "pdfs";
-
-function openDb() {
-  return new Promise((resolve, reject) => {
-    if (typeof indexedDB === "undefined") {
-      reject(new Error("IndexedDB is not available in this browser."));
-      return;
-    }
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME);
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
+import { supabase, PDF_BUCKET } from "../lib/supabaseClient";
 
 export function generatePdfId() {
-  return `pdf-${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+  return `pdf-${Date.now()}-${Math.round(Math.random() * 1e6)}.pdf`;
 }
 
-// Saves a File/Blob under `id`. Throws on failure (caller decides how to
-// degrade — see estimateImport's parseEstimateFile, which lets the import
-// proceed without a viewable PDF rather than failing the whole import).
-export function savePdfBlob(id, blob) {
-  return openDb().then(
-    (db) =>
-      new Promise((resolve, reject) => {
-        const tx = db.transaction(STORE_NAME, "readwrite");
-        tx.objectStore(STORE_NAME).put(blob, id);
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-      })
-  );
+// Uploads a File/Blob under `id` (the storage object path). Throws on
+// failure (caller decides how to degrade — see estimateImport's
+// parseEstimateFile, which lets the import proceed without a viewable PDF
+// rather than failing the whole import).
+export async function savePdfBlob(id, blob) {
+  const { error } = await supabase.storage.from(PDF_BUCKET).upload(id, blob, {
+    contentType: blob.type || "application/pdf",
+    upsert: true,
+  });
+  if (error) throw error;
 }
 
 // Returns the stored Blob for `id`, or null if missing/unavailable. Never
@@ -64,14 +35,20 @@ export function savePdfBlob(id, blob) {
 export async function getPdfBlob(id) {
   if (!id) return null;
   try {
-    const db = await openDb();
-    return await new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, "readonly");
-      const req = tx.objectStore(STORE_NAME).get(id);
-      req.onsuccess = () => resolve(req.result ?? null);
-      req.onerror = () => reject(req.error);
-    });
+    const { data, error } = await supabase.storage.from(PDF_BUCKET).download(id);
+    if (error) return null;
+    return data;
   } catch {
     return null;
   }
+}
+
+// Public URL for `id` — the bucket is public-read (see the migration), so
+// this is a plain, stable link with no signed-URL round trip or expiry.
+// Used as a fallback / for direct linking where a same-tab download isn't
+// necessary.
+export function getPdfPublicUrl(id) {
+  if (!id) return null;
+  const { data } = supabase.storage.from(PDF_BUCKET).getPublicUrl(id);
+  return data?.publicUrl ?? null;
 }
