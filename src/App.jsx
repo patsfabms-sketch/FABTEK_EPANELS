@@ -9,6 +9,7 @@ import Team from "./pages/desktop/Team";
 import Estimates from "./pages/desktop/Estimates";
 import EmployeeDetail from "./pages/desktop/EmployeeDetail";
 import Panels from "./pages/desktop/Panels";
+import GetApp from "./pages/desktop/GetApp";
 import Home from "./pages/mobile/Home";
 import ActiveSession from "./pages/mobile/ActiveSession";
 import History from "./pages/mobile/History";
@@ -29,6 +30,7 @@ export default function App() {
             <Route path="/team/:id" element={<EmployeeDetail />} />
             <Route path="/estimates" element={<Estimates />} />
             <Route path="/panels" element={<Panels />} />
+            <Route path="/get-app" element={<GetApp />} />
           </Route>
 
           <Route element={<MobileLayout />}>

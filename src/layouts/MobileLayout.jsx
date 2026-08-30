@@ -18,18 +18,29 @@ export default function MobileLayout() {
   const navigate = useNavigate();
 
   return (
-    <div className="min-h-screen bg-ink-950 flex items-center justify-center py-8 px-4">
-      <div className="w-full max-w-[400px] bg-paper-50 rounded-[2.25rem] border-8 border-ink-900 shadow-popover overflow-hidden flex flex-col h-[820px]">
+    // Below the sm breakpoint (a real phone, including this installed as a
+    // PWA) this renders edge-to-edge with no decorative bezel — the phone
+    // mockup (rounded corners, thick border, fixed height, fake status bar)
+    // only makes sense as a preview inside a wide desktop browser window,
+    // where there's no real phone chrome around the page to begin with.
+    <div className="min-h-screen bg-paper-50 sm:bg-ink-950 sm:flex sm:items-center sm:justify-center sm:py-8 sm:px-4">
+      <div className="w-full h-screen sm:h-[820px] sm:max-w-[400px] bg-paper-50 sm:rounded-[2.25rem] sm:border-8 sm:border-ink-900 sm:shadow-popover overflow-hidden flex flex-col">
         <SaveErrorBanner saveError={saveError} />
-        <div className="flex items-center justify-between px-5 pt-3 pb-1 text-[11px] font-semibold text-ink-900 shrink-0">
+        {/* Fake status bar — only for the desktop preview; a real phone (or
+            this installed as a standalone PWA) supplies its own. */}
+        <div className="hidden sm:flex items-center justify-between px-5 pt-3 pb-1 text-[11px] font-semibold text-ink-900 shrink-0">
           <span>9:41</span>
           <span className="flex items-center gap-1 text-ink-500">
             <SignalIcon /> <WifiIcon /> <BatteryIcon />
           </span>
         </div>
+        {/* Safe-area spacer for a real device's notch/status bar, since an
+            installed standalone PWA has no browser chrome of its own to
+            push content down for it. */}
+        <div className="sm:hidden shrink-0" style={{ height: "env(safe-area-inset-top)" }} />
         <Link
           to="/dashboard"
-          className="mx-5 mb-1 shrink-0 text-[10px] font-semibold text-brand-600 hover:text-brand-700 self-start"
+          className="mx-5 mt-2 sm:mt-0 mb-1 shrink-0 text-[10px] font-semibold text-brand-600 hover:text-brand-700 self-start"
         >
           ← Manager (desktop) console
         </Link>
@@ -51,7 +62,10 @@ export default function MobileLayout() {
         </div>
 
         {currentUser && (
-          <nav className="grid grid-cols-4 border-t border-paper-200 bg-white shrink-0">
+          <nav
+            className="grid grid-cols-4 border-t border-paper-200 bg-white shrink-0"
+            style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+          >
             {TABS.map((tab) => (
               <NavLink
                 key={tab.to}

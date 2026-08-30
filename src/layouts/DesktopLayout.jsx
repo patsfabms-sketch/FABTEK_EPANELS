@@ -10,6 +10,7 @@ const NAV = [
   { to: "/goals", label: "Goals", icon: GoalsIcon },
   { to: "/team", label: "Team", icon: TeamIcon },
   { to: "/estimates", label: "Estimates", icon: EstimatesIcon },
+  { to: "/get-app", label: "Get the App", icon: GetAppIcon },
 ];
 
 export default function DesktopLayout() {
@@ -144,6 +145,16 @@ function PhoneIcon(props) {
     <svg {...iconProps(props)}>
       <rect x="7" y="2.5" width="10" height="19" rx="2" />
       <path d="M11 18h2" strokeLinecap="round" />
+    </svg>
+  );
+}
+function GetAppIcon(props) {
+  return (
+    <svg {...iconProps(props)}>
+      <rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1" />
+      <rect x="14" y="3.5" width="6.5" height="6.5" rx="1" />
+      <rect x="3.5" y="14" width="6.5" height="6.5" rx="1" />
+      <path d="M14 15.5h2.5M17.5 14v5M20.5 15.5h-2" strokeLinecap="round" />
     </svg>
   );
 }
