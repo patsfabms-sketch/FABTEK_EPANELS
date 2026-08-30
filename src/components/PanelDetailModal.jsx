@@ -215,7 +215,10 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
       <div className="mt-6 pt-4 border-t border-paper-100 flex flex-wrap justify-end gap-2">
         <ViewPdfButton panel={panel} />
         <Button variant="subtle" onClick={() => downloadPanelQr(panel)}>
-          <DownloadIcon /> Download QR Code
+          <DownloadIcon /> Download QR (PNG)
+        </Button>
+        <Button variant="subtle" onClick={() => downloadPanelQrSvg(panel)}>
+          <DownloadIcon /> Download QR (SVG)
         </Button>
         <Button onClick={() => setShowPrint(true)}>
           <PrinterIcon /> Print QR Code
@@ -478,6 +481,63 @@ async function downloadPanelQr(panel) {
   }
 }
 
+// Minimal escaping for the two bits of user-entered text (job description /
+// customer name) that get interpolated directly into the SVG below as
+// element content — enough to keep a stray "&", "<", or quote from breaking
+// the markup.
+function escapeXml(str) {
+  return String(str).replace(/[<>&'"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" }[c]));
+}
+
+// Vector twin of composeQrLabel/downloadPanelQr above, for label software
+// that wants art it can rescale without going soft (LabelForge PRO's Image
+// import accepts .svg directly, same as .png). Reuses panelQrValue() so the
+// PNG and SVG downloads always encode identical panel/job data — only the
+// output format differs.
+async function composeQrLabelSvg(panel) {
+  const rawSvg = await QRCode.toString(panelQrValue(panel), { type: "svg", margin: 1 });
+  const viewBoxMatch = rawSvg.match(/viewBox="0 0 ([\d.]+) ([\d.]+)"/);
+  const size = viewBoxMatch ? Number(viewBoxMatch[1]) : 100;
+  const innerMatch = rawSvg.match(/<svg[^>]*>([\s\S]*)<\/svg>/);
+  const qrInner = innerMatch ? innerMatch[1] : "";
+
+  const padding = size * 0.05;
+  const line1FontPx = size * 0.05;
+  const line2FontPx = size * 0.042;
+  const lineGap = size * 0.02;
+  const textBlockHeight = line1FontPx + lineGap + line2FontPx + padding * 1.5;
+  const totalHeight = size + textBlockHeight;
+
+  const line1 = escapeXml(`Job #${panel.jobNumber || "—"}  ·  Panel #${panel.id}`);
+  const line2 = escapeXml(panel.order || panel.customer || "");
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${totalHeight}" viewBox="0 0 ${size} ${totalHeight}">
+<rect x="0" y="0" width="${size}" height="${totalHeight}" fill="#ffffff"/>
+<g>${qrInner}</g>
+<text x="${size / 2}" y="${size + padding / 2}" text-anchor="middle" dominant-baseline="hanging" font-family="Arial, sans-serif" font-weight="bold" font-size="${line1FontPx}" fill="#111111">${line1}</text>${
+    line2
+      ? `\n<text x="${size / 2}" y="${size + padding / 2 + line1FontPx + lineGap}" text-anchor="middle" dominant-baseline="hanging" font-family="Arial, sans-serif" font-size="${line2FontPx}" fill="#111111">${line2}</text>`
+      : ""
+  }
+</svg>`;
+}
+
+async function downloadPanelQrSvg(panel) {
+  try {
+    const svg = await composeQrLabelSvg(panel);
+    const blob = new Blob([svg], { type: "image/svg+xml" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `panel-${panel.jobNumber || panel.id}-qr.svg`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch {
+    // best-effort — if generation fails there's nothing else useful to do here
+  }
+}
+
 const PDF_BUTTON_BASE_CLASS =
   "inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold transition-colors";
 
@@ -731,7 +791,10 @@ function PrintQrModal({ panel, onClose }) {
           Cancel
         </Button>
         <Button variant="subtle" onClick={() => downloadPanelQr(panel)} disabled={!dataUrl}>
-          <DownloadIcon /> Download PNG
+          <DownloadIcon /> PNG
+        </Button>
+        <Button variant="subtle" onClick={() => downloadPanelQrSvg(panel)} disabled={!dataUrl}>
+          <DownloadIcon /> SVG
         </Button>
         <Button onClick={handlePrint} disabled={!dataUrl}>
           <PrinterIcon /> Print
