@@ -21,7 +21,9 @@ const SIZE_PRESETS = [
 const PAGE_USABLE_WIDTH_IN = 8;
 const PAGE_USABLE_HEIGHT_IN = 10.5;
 const GAP_IN = 0.15;
-const LABEL_HEIGHT_IN = 0.22;
+// Two lines now (Job #/Panel # and Description), not one — see the
+// qr-sticker markup in PrintQrModal.
+const LABEL_HEIGHT_IN = 0.34;
 
 function formatElapsed(startedAt, now) {
   const mins = Math.max(0, Math.round((now - startedAt) / 60000));
@@ -404,15 +406,86 @@ function EditPanelModal({ panel, onClose, onDeleted }) {
   );
 }
 
-// Generates a QR at print-shop resolution and triggers a browser download —
-// separate from the Print flow so a sticker can be dropped straight into
-// thermal-printer label software instead of going through this app's own
-// print layout.
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Couldn't load the generated QR code."));
+    img.src = src;
+  });
+}
+
+// Canvas-measures how much of `text` fits in `maxWidth` at ctx's current
+// font, truncating with an ellipsis rather than letting a long job
+// description run off the edge of the label.
+function truncateToWidth(ctx, text, maxWidth) {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    const candidate = `${text.slice(0, mid)}…`;
+    if (ctx.measureText(candidate).width <= maxWidth) low = mid;
+    else high = mid - 1;
+  }
+  return `${text.slice(0, low)}…`;
+}
+
+// Draws the panel's Job #, Panel #, and Description directly onto the QR
+// image itself (not just encoded inside it) — this download is meant to
+// leave the app entirely (dropped into thermal-printer label software, a
+// shared folder, etc.), so the identifying text needs to travel with the
+// picture, not live only in this modal.
+async function composeQrLabel(qrDataUrl, panel) {
+  const qrImg = await loadImage(qrDataUrl);
+  const size = qrImg.width;
+  const padding = Math.round(size * 0.05);
+  const line1FontPx = Math.round(size * 0.05);
+  const line2FontPx = Math.round(size * 0.042);
+  const lineGap = Math.round(size * 0.02);
+  const textBlockHeight = line1FontPx + lineGap + line2FontPx + padding * 1.5;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size + textBlockHeight;
+  const ctx = canvas.getContext("2d");
+
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(qrImg, 0, 0, size, size);
+
+  const maxTextWidth = size - padding * 2;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "#111111";
+
+  const line1 = `Job #${panel.jobNumber || "—"}  ·  Panel #${panel.id}`;
+  ctx.font = `bold ${line1FontPx}px Arial, sans-serif`;
+  ctx.fillText(truncateToWidth(ctx, line1, maxTextWidth), size / 2, size + padding / 2);
+
+  const line2 = panel.order || panel.customer || "";
+  if (line2) {
+    ctx.font = `${line2FontPx}px Arial, sans-serif`;
+    ctx.fillText(
+      truncateToWidth(ctx, line2, maxTextWidth),
+      size / 2,
+      size + padding / 2 + line1FontPx + lineGap
+    );
+  }
+
+  return canvas.toDataURL("image/png");
+}
+
+// Generates a QR at print-shop resolution, labels it with the panel's
+// identifying info, and triggers a browser download — separate from the
+// Print flow so a sticker can be dropped straight into thermal-printer
+// label software instead of going through this app's own print layout.
 async function downloadPanelQr(panel) {
   try {
-    const dataUrl = await QRCode.toDataURL(panelQrValue(panel), { width: 1024, margin: 1 });
+    const qrDataUrl = await QRCode.toDataURL(panelQrValue(panel), { width: 1024, margin: 1 });
+    const labeledDataUrl = await composeQrLabel(qrDataUrl, panel);
     const a = document.createElement("a");
-    a.href = dataUrl;
+    a.href = labeledDataUrl;
     a.download = `panel-${panel.jobNumber || panel.id}-qr.png`;
     a.click();
   } catch {
@@ -495,7 +568,7 @@ function PrintQrModal({ panel, onClose }) {
         </button>
       </div>
 
-      <div className="flex justify-center mb-5">
+      <div className="flex justify-center mb-2">
         <div className="rounded-lg border border-paper-200 bg-white p-3">
           {dataUrl ? (
             <img src={dataUrl} alt={`QR code for panel ${panel.id}`} width={140} height={140} />
@@ -508,6 +581,15 @@ function PrintQrModal({ panel, onClose }) {
           )}
         </div>
       </div>
+      <p className="text-center text-[12px] font-semibold text-ink-900">
+        Job #{panel.jobNumber || "—"} · Panel #{panel.id}
+      </p>
+      {(panel.order || panel.customer) && (
+        <p className="text-center text-[11px] text-ink-500 mb-1 truncate">{panel.order || panel.customer}</p>
+      )}
+      <p className="text-center text-[10px] text-ink-400 mb-5">
+        Every sticker printed below includes this Job #, Panel #, and description as text
+      </p>
 
       <label className="text-xs font-semibold text-ink-500">QR code size</label>
       <div className="grid grid-cols-4 gap-2 mt-1.5 mb-3">
@@ -593,10 +675,17 @@ function PrintQrModal({ panel, onClose }) {
                   display: block;
                 }
                 #qr-print-area .qr-sticker p {
-                  font-size: 8pt;
+                  font-size: 7pt;
                   text-align: center;
                   margin: 2pt 0 0;
                   color: #000;
+                  white-space: nowrap;
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                  width: ${sizeIn}in;
+                }
+                #qr-print-area .qr-sticker .qr-line1 {
+                  font-weight: 700;
                 }
                 @page { size: letter; margin: 0; }
               }
@@ -604,9 +693,10 @@ function PrintQrModal({ panel, onClose }) {
             {Array.from({ length: quantity }).map((_, i) => (
               <div className="qr-sticker" key={i}>
                 <img src={dataUrl} alt="" />
-                <p>
-                  #{panel.id} · {panel.customer}
+                <p className="qr-line1">
+                  Job #{panel.jobNumber || "—"} · Panel #{panel.id}
                 </p>
+                {(panel.order || panel.customer) && <p className="qr-line2">{panel.order || panel.customer}</p>}
               </div>
             ))}
           </div>,

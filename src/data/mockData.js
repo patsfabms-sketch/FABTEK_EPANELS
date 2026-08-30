@@ -212,9 +212,13 @@ export function connectionsForPanel(panel, fallbackRate) {
 // namespaced convention (rather than the bare panel id) so a future real
 // camera-scan implementation on the mobile app can reliably recognize an
 // AssemblyOS panel sticker versus any other QR code someone might point the
-// camera at.
+// camera at. The job number rides along in the encoded value too — since the
+// same panel id can recur across repeat builds (see the "repeat panel
+// builds" note below), a future scan handler can use it the same way a
+// human reading the sticker does, to tell which build a given physical
+// sticker was printed for.
 export function panelQrValue(panel) {
-  return `ASSEMBLYOS:PANEL:${panel.id}`;
+  return `ASSEMBLYOS:PANEL:${panel.id}:JOB:${panel.jobNumber || ""}`;
 }
 
 // Stages a technician can pick after scanning a panel's QR code.
