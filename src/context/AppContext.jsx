@@ -25,10 +25,51 @@ function loadPersisted() {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    return JSON.parse(raw);
+    return migrateLegacyBuildIds(JSON.parse(raw));
   } catch {
     return null;
   }
+}
+
+// Panels imported before the "repeat panel builds" feature existed (and any
+// workHistory/activeSessions/session rows logged against them) were saved
+// with no buildId at all. Every click, edit, and delete path is now keyed by
+// buildId — a panel missing one resolves to `undefined`, which is falsy, so
+// the row silently stops opening its detail view. This runs once on load,
+// assigns each such panel a stable id (deterministic, so it's a no-op once
+// applied), and carries that same id onto its own history rows so existing
+// progress/hours stay attached rather than resetting to zero.
+function migrateLegacyBuildIds(state) {
+  if (!state || !Array.isArray(state.panels)) return state;
+  const buildIdByTag = new Map();
+  let changed = false;
+
+  const panels = state.panels.map((p) => {
+    if (p.buildId) return p;
+    changed = true;
+    const buildId = `b-legacy-${p.id}`;
+    buildIdByTag.set(`#${p.id}`, buildId);
+    return { ...p, buildId };
+  });
+
+  if (!changed) return state;
+
+  const stampBuildId = (row) => {
+    if (!row || row.buildId || !row.panel) return row;
+    const buildId = buildIdByTag.get(row.panel);
+    return buildId ? { ...row, buildId } : row;
+  };
+
+  return {
+    ...state,
+    panels,
+    workHistory: Array.isArray(state.workHistory) ? state.workHistory.map(stampBuildId) : state.workHistory,
+    activeSessions: Array.isArray(state.activeSessions) ? state.activeSessions.map(stampBuildId) : state.activeSessions,
+    session:
+      state.session && !state.session.buildId && state.session.panel && buildIdByTag.has(state.session.panel)
+        ? { ...state.session, buildId: buildIdByTag.get(state.session.panel) }
+        : state.session,
+  };
 }
 
 export function AppProvider({ children }) {
