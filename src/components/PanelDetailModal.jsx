@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import QRCode from "qrcode";
 import { panelQrValue } from "../data/mockData";
-import { Modal, Button, RoleBadge, formatNumber } from "./ui";
+import { Modal, Button, RoleBadge, formatNumber, formatDate } from "./ui";
 
 const SIZE_PRESETS = [
   { label: "Small", inches: 1 },
@@ -45,7 +45,10 @@ export default function PanelDetailModal({ group, onClose }) {
     <Modal onClose={onClose} widthClass="max-w-2xl">
       <div className="flex items-start justify-between mb-1">
         <div>
-          <h2 className="text-lg font-bold text-ink-900">Panel #{panel.id}</h2>
+          <h2 className="text-lg font-bold text-ink-900">
+            Job #{panel.jobNumber || panel.id}
+            {panel.jobNumber && <span className="text-ink-400 font-normal text-sm"> · Panel #{panel.id}</span>}
+          </h2>
           <p className="text-sm text-ink-500 mt-0.5">
             {panel.customer}
             {panel.order ? ` · ${panel.order}` : ""}
@@ -65,6 +68,13 @@ export default function PanelDetailModal({ group, onClose }) {
         <StatBlock label="Estimate" value={`$${formatNumber(panel.price)}`} />
         <StatBlock label="Active Now" value={active.length} />
         <StatBlock label="Logged Entries" value={completed.length} />
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5 text-[12px]">
+        <DetailField label="Date Added" value={formatDate(panel.dateAdded)} />
+        <DetailField label="Job Number" value={panel.jobNumber || "—"} />
+        <DetailField label="PO Number" value={panel.poNumber || "—"} />
+        <DetailField label="Description" value={panel.order || "—"} />
       </div>
 
       <p className="text-[11px] font-semibold text-ink-500 uppercase tracking-wide mb-2">
@@ -113,7 +123,27 @@ export default function PanelDetailModal({ group, onClose }) {
         </div>
       )}
 
-      <div className="mt-6 pt-4 border-t border-paper-100 flex justify-end">
+      <div className="mt-6 pt-4 border-t border-paper-100 flex flex-wrap justify-end gap-2">
+        {panel.pdfDataUrl ? (
+          <a
+            href={panel.pdfDataUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold transition-colors bg-transparent text-ink-700 hover:bg-paper-100 border border-paper-200"
+          >
+            <DocIcon /> View Estimate PDF
+          </a>
+        ) : (
+          <span
+            title="No source PDF on file for this panel (imported from a CSV, or before PDF import was supported)"
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold bg-transparent text-ink-300 border border-paper-200 cursor-not-allowed"
+          >
+            <DocIcon /> View Estimate PDF
+          </span>
+        )}
+        <Button variant="subtle" onClick={() => downloadPanelQr(panel)}>
+          <DownloadIcon /> Download QR Code
+        </Button>
         <Button onClick={() => setShowPrint(true)}>
           <PrinterIcon /> Print QR Code
         </Button>
@@ -124,11 +154,38 @@ export default function PanelDetailModal({ group, onClose }) {
   );
 }
 
+// Generates a QR at print-shop resolution and triggers a browser download —
+// separate from the Print flow so a sticker can be dropped straight into
+// thermal-printer label software instead of going through this app's own
+// print layout.
+async function downloadPanelQr(panel) {
+  try {
+    const dataUrl = await QRCode.toDataURL(panelQrValue(panel), { width: 1024, margin: 1 });
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = `panel-${panel.jobNumber || panel.id}-qr.png`;
+    a.click();
+  } catch {
+    // best-effort — if generation fails there's nothing else useful to do here
+  }
+}
+
 function StatBlock({ label, value }) {
   return (
     <div className="flex-1 min-w-[130px] rounded-lg bg-paper-50 border border-paper-200 px-3 py-2.5">
       <p className="text-[11px] font-medium text-ink-500">{label}</p>
       <p className="text-lg font-bold text-ink-900 mt-0.5">{value}</p>
+    </div>
+  );
+}
+
+function DetailField({ label, value }) {
+  return (
+    <div>
+      <p className="text-[10px] font-semibold text-ink-500 uppercase tracking-wide">{label}</p>
+      <p className="text-ink-900 font-medium mt-0.5 truncate" title={value}>
+        {value}
+      </p>
     </div>
   );
 }
@@ -253,6 +310,9 @@ function PrintQrModal({ panel, onClose }) {
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
+        <Button variant="subtle" onClick={() => downloadPanelQr(panel)} disabled={!dataUrl}>
+          <DownloadIcon /> Download PNG
+        </Button>
         <Button onClick={handlePrint} disabled={!dataUrl}>
           <PrinterIcon /> Print
         </Button>
@@ -312,6 +372,25 @@ function PrinterIcon() {
       <path d="M6 9V3.5h12V9" strokeLinecap="round" strokeLinejoin="round" />
       <rect x="4" y="9" width="16" height="8" rx="1.5" />
       <path d="M6 14.5h12V20a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-5.5Z" />
+    </svg>
+  );
+}
+
+function DownloadIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M12 3.5v11.5M12 15l-4-4M12 15l4-4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4.5 17.5V19a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function DocIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M7 3.5h7l4 4v13a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-16a.5.5 0 0 1 .5-.5Z" strokeLinejoin="round" />
+      <path d="M14 3.5V8h4" strokeLinejoin="round" />
+      <path d="M9 12.5h6M9 15.5h6M9 9.5h2" strokeLinecap="round" />
     </svg>
   );
 }

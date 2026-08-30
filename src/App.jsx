@@ -11,7 +11,6 @@ import EmployeeDetail from "./pages/desktop/EmployeeDetail";
 import Panels from "./pages/desktop/Panels";
 import Home from "./pages/mobile/Home";
 import ActiveSession from "./pages/mobile/ActiveSession";
-import LogWork from "./pages/mobile/LogWork";
 import History from "./pages/mobile/History";
 import Profile from "./pages/mobile/Profile";
 
@@ -35,7 +34,6 @@ export default function App() {
           <Route element={<MobileLayout />}>
             <Route path="/mobile" element={<Home />} />
             <Route path="/mobile/session" element={<ActiveSession />} />
-            <Route path="/mobile/log" element={<LogWork />} />
             <Route path="/mobile/history" element={<History />} />
             <Route path="/mobile/profile" element={<Profile />} />
           </Route>

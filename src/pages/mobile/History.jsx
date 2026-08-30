@@ -85,6 +85,11 @@ export default function History() {
               <span>
                 <span className="font-semibold text-ink-900">+{h.percentAdded}%</span> progress
               </span>
+              {h.connectionsCredited > 0 && (
+                <span>
+                  <span className="font-semibold text-ink-900">+{h.connectionsCredited}</span> connections
+                </span>
+              )}
               <span
                 className={`font-semibold ${h.taskCompleted ? "text-good-600" : "text-warn-600"}`}
               >

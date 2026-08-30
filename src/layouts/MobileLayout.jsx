@@ -3,9 +3,11 @@ import { useApp } from "../context/AppContext";
 import Login from "../pages/mobile/Login";
 import AdminHome from "../pages/mobile/AdminHome";
 
+// No "Log Work" tab — work is logged automatically as a byproduct of
+// scanning into a panel and stopping the session (see AppContext.stopSession),
+// never through a standalone manual-entry form.
 const TABS = [
   { to: "/mobile", label: "Home", icon: HomeIcon, end: true },
-  { to: "/mobile/log", label: "Log Work", icon: LogIcon },
   { to: "/mobile/history", label: "History", icon: HistoryIcon },
   { to: "/mobile/profile", label: "Profile", icon: ProfileIcon },
 ];
@@ -78,14 +80,6 @@ function HomeIcon(props) {
     <svg {...iconProps(props)}>
       <path d="M4 11.5 12 4l8 7.5" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M6 10v9h12v-9" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-function LogIcon(props) {
-  return (
-    <svg {...iconProps(props)}>
-      <rect x="4.5" y="3.5" width="15" height="17" rx="2" />
-      <path d="M8 8h8M8 12h8M8 16h5" strokeLinecap="round" />
     </svg>
   );
 }

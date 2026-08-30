@@ -13,9 +13,23 @@ function readFileAsText(file) {
   });
 }
 
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+// PDF imports carry the original document along with them (as a data URL) so
+// it can be opened again later from the panel detail view — "the original
+// document of the PDF estimate should also be available to view". CSV
+// imports have no source document to attach.
 async function parseEstimateFile(file) {
   if (file.name.toLowerCase().endsWith(".pdf") || file.type === "application/pdf") {
-    return parseEstimatePdf(file);
+    const [{ rows, errors }, pdfDataUrl] = await Promise.all([parseEstimatePdf(file), readFileAsDataUrl(file)]);
+    return { rows: rows.map((r) => ({ ...r, pdfDataUrl, pdfFileName: file.name })), errors };
   }
   return parseEstimateCsv(await readFileAsText(file));
 }
@@ -148,7 +162,9 @@ function PanelEstimatesCard() {
           <thead>
             <tr className="text-left text-ink-500 border-b border-paper-100">
               <th className="py-1.5 pr-3 font-semibold">Panel</th>
+              <th className="py-1.5 pr-3 font-semibold">Job #</th>
               <th className="py-1.5 pr-3 font-semibold">Customer</th>
+              <th className="py-1.5 pr-3 font-semibold">PO #</th>
               <th className="py-1.5 pr-3 font-semibold">Estimate</th>
               <th className="py-1.5 pr-3 font-semibold text-right">Connections</th>
             </tr>
@@ -157,7 +173,9 @@ function PanelEstimatesCard() {
             {panels.map((p) => (
               <tr key={p.id} className="border-b border-paper-50">
                 <td className="py-1.5 pr-3 font-medium text-ink-900">#{p.id}</td>
+                <td className="py-1.5 pr-3 text-ink-600">{p.jobNumber || "—"}</td>
                 <td className="py-1.5 pr-3 text-ink-600">{p.customer}</td>
+                <td className="py-1.5 pr-3 text-ink-600">{p.poNumber || "—"}</td>
                 <td className="py-1.5 pr-3 text-ink-600">${formatNumber(p.price)}</td>
                 <td className="py-1.5 pr-3 text-right font-semibold text-ink-900">
                   {formatNumber(connectionsForPanel(p, pricePerConnection))}

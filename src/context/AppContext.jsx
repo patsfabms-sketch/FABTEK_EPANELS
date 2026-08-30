@@ -11,10 +11,15 @@ import {
   attainment,
   taskProgress,
   generateUsername,
+  productionStages,
 } from "../data/mockData";
 
 const AppContext = createContext(null);
 const STORAGE_KEY = "assemblyos-state-v7";
+
+// The one stage where progress logged translates directly into a connection
+// count — see stopSession below.
+const CONNECT_STAGE_LABEL = productionStages.find((s) => s.key === "connect")?.label;
 
 function loadPersisted() {
   try {
@@ -291,6 +296,7 @@ export function AppProvider({ children }) {
 
   function importEstimates(rows) {
     if (!rows.length) return;
+    const today = new Date().toISOString().slice(0, 10);
     setPanels((prev) => {
       const byId = new Map(prev.map((p) => [p.id, p]));
       rows.forEach((r) => {
@@ -300,6 +306,13 @@ export function AppProvider({ children }) {
           customer: r.customer || existing?.customer || "Unknown Customer",
           order: r.order || existing?.order || "",
           price: r.price,
+          jobNumber: r.jobNumber || existing?.jobNumber || "",
+          poNumber: r.poNumber || existing?.poNumber || "",
+          // Set once, the first time a panel is imported — re-importing the
+          // same job (e.g. a revised estimate) doesn't reset it.
+          dateAdded: existing?.dateAdded || today,
+          pdfDataUrl: r.pdfDataUrl || existing?.pdfDataUrl || null,
+          pdfFileName: r.pdfFileName || existing?.pdfFileName || null,
         });
       });
       return Array.from(byId.values());
@@ -371,12 +384,22 @@ export function AppProvider({ children }) {
   }
 
   // percentAdded: how much of the task this session completed, already
-  // clamped by the caller to [0, 100 - session.startingProgress].
+  // clamped by the caller to [0, 100 - session.startingProgress]. This is the
+  // only way work gets logged — there's no separate manual "log work" entry
+  // point, so every workHistory row traces back to an actual scan-in/scan-out
+  // session. For the Route/Terminate stage specifically, the percentage
+  // reported converts directly into a connection count against the panel's
+  // target (e.g. 50% of a 100-connection panel credits 50 connections) — see
+  // computeStageStats in mockData.js for how that rolls up into a
+  // technician's average connections/hour.
   function stopSession(percentAdded) {
     if (!session.active) return;
     const hours = session.startedAt ? (Date.now() - session.startedAt) / 3600000 : 0;
     const pct = Math.max(0, Math.min(100 - session.startingProgress, percentAdded ?? 0));
     const isComplete = session.startingProgress + pct >= 100;
+    const isConnectStage = session.stage === CONNECT_STAGE_LABEL;
+    const connectionsCredited =
+      isConnectStage && session.targetConnections ? Math.round((pct / 100) * session.targetConnections) : 0;
     setWorkHistory((prev) => [
       {
         id: `h${Date.now()}`,
@@ -386,6 +409,7 @@ export function AppProvider({ children }) {
         stage: session.stage,
         percentAdded: pct,
         taskCompleted: isComplete,
+        connectionsCredited,
         panels: 1,
         hours: Math.max(0.1, Number(hours.toFixed(1))),
         status: "Verified",
@@ -396,9 +420,11 @@ export function AppProvider({ children }) {
       {
         id: `a${Date.now()}`,
         who: "You",
-        action: isComplete
-          ? `completed ${session.stage.toLowerCase()}`
-          : `logged ${pct}% progress on ${session.stage.toLowerCase()} (now ${session.startingProgress + pct}%)`,
+        action:
+          (isComplete
+            ? `completed ${session.stage.toLowerCase()}`
+            : `logged ${pct}% progress on ${session.stage.toLowerCase()} (now ${session.startingProgress + pct}%)`) +
+          (connectionsCredited > 0 ? ` · +${connectionsCredited} connections` : ""),
         ref: `Panel ${session.panel}`,
         time: "just now",
         kind: isComplete ? "verify" : "scan",
@@ -415,26 +441,6 @@ export function AppProvider({ children }) {
       startedAt: null,
       notes: "",
     });
-  }
-
-  function submitProductionLog(entry) {
-    const startingProgress = taskProgress(workHistory, entry.panel, entry.stage);
-    const pct = Math.max(0, Math.min(100 - startingProgress, entry.percentAdded ?? 0));
-    setWorkHistory((prev) => [
-      {
-        id: `h${Date.now()}`,
-        employeeId: currentUserId,
-        date: new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
-        panel: entry.panel,
-        stage: entry.stage,
-        percentAdded: pct,
-        taskCompleted: startingProgress + pct >= 100,
-        panels: 1,
-        hours: entry.hours ?? 1,
-        status: "Verified",
-      },
-      ...prev,
-    ]);
   }
 
   const myWorkHistory = useMemo(
@@ -470,7 +476,6 @@ export function AppProvider({ children }) {
     startSession,
     setSessionNotes,
     stopSession,
-    submitProductionLog,
     checkUsername,
     login,
     setPinAndLogin,

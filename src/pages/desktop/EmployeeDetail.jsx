@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
-import { generateStageBreakdown, attainmentTone } from "../../data/mockData";
+import { computeStageStats, attainmentTone } from "../../data/mockData";
 import { Card, SectionTitle, StatCard, RoleBadge } from "../../components/ui";
 
 const TONE_ACCENT = {
@@ -17,12 +17,11 @@ export default function EmployeeDetail() {
 
   const employee = employees.find((e) => e.id === id);
 
-  // Brand-new hires have no track record yet — show an empty state instead
-  // of fabricating stage history for someone who hasn't logged anything.
-  const isNewHire = employee ? employee.currentWeekAvg === 0 : false;
+  // Real output stats computed from this technician's actual logged
+  // sessions — stages they haven't worked simply don't appear.
   const breakdown = useMemo(
-    () => (employee && !isNewHire ? generateStageBreakdown(employee) : []),
-    [employee, isNewHire]
+    () => (employee ? computeStageStats(workHistory, employee.id) : []),
+    [employee, workHistory]
   );
   const recentActivity = useMemo(
     () => workHistory.filter((h) => h.employeeId === id),
@@ -86,7 +85,7 @@ export default function EmployeeDetail() {
         subtitle="Sessions and time logged on each production stage — building, aux panels, routing, rework, and more"
       />
       <Card className="mb-8">
-        {isNewHire && (
+        {breakdown.length === 0 && (
           <p className="text-xs text-ink-400 text-center py-6">
             No task history yet — this technician hasn't logged any sessions.
           </p>
@@ -97,8 +96,11 @@ export default function EmployeeDetail() {
               <div className="flex items-center justify-between mb-1">
                 <span className="text-[13px] font-medium text-ink-900">{b.label}</span>
                 <span className="text-[11px] text-ink-500">
-                  {b.sessions} session{b.sessions === 1 ? "" : "s"} · {b.hours} hrs ·{" "}
+                  {b.sessions} session{b.sessions === 1 ? "" : "s"} · {b.hours} hrs (avg {b.avgHours} hrs/task) ·{" "}
                   {b.completedTasks} completed
+                  {b.key === "connect" && b.totalConnections > 0
+                    ? ` · ${b.connectionsPerHour} conn/hr avg`
+                    : ""}
                 </span>
               </div>
               <div className="h-2 rounded-full bg-paper-100 overflow-hidden">

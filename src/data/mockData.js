@@ -167,23 +167,36 @@ export const productionStages = [
   { key: "auxswitch", label: "Aux Switch Assm." },
 ];
 
-// Deterministic per-employee breakdown of logged work by production stage —
-// stands in for real per-task history until sessions are attributed to every
-// technician (only the mobile demo user currently produces real workHistory).
-export function generateStageBreakdown(employee) {
-  const seedStr = employee.id + employee.role;
-  let seed = 0;
-  for (let i = 0; i < seedStr.length; i++) seed = (seed * 31 + seedStr.charCodeAt(i)) % 100000;
-  const rand = () => {
-    seed = (seed * 9301 + 49297) % 233280;
-    return seed / 233280;
-  };
+// Key of the "Route/Terminate" stage — the one stage where progress logged
+// translates directly into a connection count (see connectionsForPanel and
+// AppContext.stopSession, which computes each session's connectionsCredited
+// as (percentAdded / 100) * the panel's target connection count).
+export const CONNECT_STAGE_KEY = "connect";
 
-  return productionStages.map((stage) => {
-    const isCore = stage.key === "build" || stage.key === "connect";
-    const sessions = Math.round(rand() * 8) + (isCore ? 5 : 1);
-    const hours = Number((sessions * (0.6 + rand() * 1.3)).toFixed(1));
-    const completedTasks = Math.max(1, Math.round(sessions * (0.55 + rand() * 0.35)));
-    return { key: stage.key, label: stage.label, sessions, hours, completedTasks };
-  });
+// Real per-employee output stats, computed from their actual logged work
+// (workHistory), broken down by production stage. Replaces what used to be a
+// seeded-random stand-in now that every technician's sessions produce real
+// history — average hours per task, and for Route/Terminate specifically,
+// average connections credited per hour (their real terminating rate).
+export function computeStageStats(workHistory, employeeId) {
+  const mine = workHistory.filter((h) => h.employeeId === employeeId);
+  return productionStages
+    .map((stage) => {
+      const rows = mine.filter((h) => h.stage === stage.label);
+      if (rows.length === 0) return null;
+      const totalHours = rows.reduce((s, h) => s + (h.hours || 0), 0);
+      const completedTasks = rows.filter((h) => h.taskCompleted).length;
+      const totalConnections = rows.reduce((s, h) => s + (h.connectionsCredited || 0), 0);
+      return {
+        key: stage.key,
+        label: stage.label,
+        sessions: rows.length,
+        hours: Number(totalHours.toFixed(1)),
+        avgHours: rows.length ? Number((totalHours / rows.length).toFixed(2)) : 0,
+        completedTasks,
+        totalConnections,
+        connectionsPerHour: totalHours > 0 ? Number((totalConnections / totalHours).toFixed(1)) : 0,
+      };
+    })
+    .filter(Boolean);
 }

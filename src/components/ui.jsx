@@ -110,3 +110,10 @@ export function Button({ children, variant = "primary", className = "", ...props
 export function formatNumber(n) {
   return new Intl.NumberFormat("en-US").format(Math.round(n));
 }
+
+export function formatDate(iso) {
+  if (!iso) return "—";
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}

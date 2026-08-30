@@ -48,6 +48,8 @@ export function parseEstimateCsv(text) {
   const customerCol = findColumn(header, ["customer", "client"]);
   const orderCol = findColumn(header, ["description", "memo", "item"]);
   const priceCol = findColumn(header, ["amount", "total", "price", "rate"]);
+  const poCol = findColumn(header, ["po number", "po #", "p.o.", "purchase order"]);
+  const jobNumberCol = findColumn(header, ["estimate no", "estimate #", "estimate number"]);
 
   if (idCol === -1 || priceCol === -1) {
     return {
@@ -69,15 +71,27 @@ export function parseEstimateCsv(text) {
       continue;
     }
 
+    const rawJobNumber = jobNumberCol !== -1 ? cells[jobNumberCol]?.trim() : "";
+
     rows.push({
       id: rawId,
       customer: customerCol !== -1 ? cells[customerCol]?.trim() : "",
       order: orderCol !== -1 ? cells[orderCol]?.trim() : "",
       price,
+      jobNumber: rawJobNumber ? stripJobNumberYear(rawJobNumber) : "",
+      poNumber: poCol !== -1 ? cells[poCol]?.trim() : "",
     });
   }
 
   return { rows, errors };
+}
+
+// QuickBooks estimate numbers are formatted "2026-1234" (year-sequence). The
+// year prefix is meaningful to QuickBooks but not to the shop floor — the
+// job number shown everywhere in AssemblyOS is just the sequence part.
+function stripJobNumberYear(raw) {
+  const match = raw.match(/^\s*20\d{2}-(\d+)\s*$/);
+  return match ? match[1] : raw;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +150,36 @@ function extractBillToName(lines) {
   return idx !== -1 ? lines[idx + 1]?.trim() ?? "" : "";
 }
 
+// Document-level fields (apply to every line item on the same PDF, unlike
+// the panel ID/customer/price which come from each line item's own row) —
+// the QuickBooks estimate number (shown on the shop floor as just the
+// sequence after the year, e.g. "2026-1234" -> "1234") and, if present, a
+// PO number. Layout isn't fixed across QuickBooks accounts, so this matches
+// loosely by keyword/pattern rather than a specific header position.
+function extractDocumentFields(lines) {
+  const joined = lines.join(" \n ");
+
+  let jobNumber = "";
+  const labeledEstimate = joined.match(/estimate\s*(?:no\.?|number|#)?\s*[:#]?\s*(20\d{2})-(\d{2,8})/i);
+  if (labeledEstimate) {
+    jobNumber = labeledEstimate[2];
+  } else {
+    const bareEstimate = joined.match(/\b(20\d{2})-(\d{2,8})\b/);
+    if (bareEstimate) jobNumber = bareEstimate[2];
+  }
+
+  // Requires an explicit label ("PO Number", "P.O. #", "Purchase Order: ...")
+  // rather than a bare "PO" — a bare match is too easy to trigger on an
+  // unrelated word that happens to contain "po" (e.g. "Deposit", "Reporting").
+  let poNumber = "";
+  const poMatch = joined.match(
+    /\b(?:purchase\s*order|p\.?\s?o\.?\s*(?:no\.?|number|#))\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9-]{2,19})/i
+  );
+  if (poMatch) poNumber = poMatch[1];
+
+  return { jobNumber, poNumber };
+}
+
 // A line item row, once joined, reads like:
 //   "1. Misc Sales No Tax 109967 FIRST ENERGY 1 $944.00 $944.00"
 // The product/service name varies by QuickBooks setup, so instead of
@@ -170,6 +214,7 @@ function parseLineItemRow(line) {
 
 function parseEstimateLines(lines) {
   const billTo = extractBillToName(lines);
+  const { jobNumber, poNumber } = extractDocumentFields(lines);
   const rows = [];
   const errors = [];
 
@@ -185,6 +230,8 @@ function parseEstimateLines(lines) {
       customer: parsed.customer || billTo || "Unknown Customer",
       order: billTo,
       price: parsed.price,
+      jobNumber,
+      poNumber,
     });
   });
 
