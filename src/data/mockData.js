@@ -72,33 +72,6 @@ export function generateUsername(name, existingUsernames = []) {
   return username;
 }
 
-
-// 30 operational days of team-wide hours logged, used by both the Goal
-// Management chart and the Reports chart.
-export function generateDailyOutput(days = 30, target = 120) {
-  const out = [];
-  const today = new Date();
-  let seed = 42;
-  const rand = () => {
-    seed = (seed * 9301 + 49297) % 233280;
-    return seed / 233280;
-  };
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    const wobble = (rand() - 0.45) * 0.28;
-    const value = Math.max(Math.round(target * 0.5), Math.round(target * (1 + wobble)));
-    out.push({
-      date: d.toISOString().slice(0, 10),
-      label: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-      value,
-      target,
-      aboveTarget: value >= target,
-    });
-  }
-  return out;
-}
-
 // Sums how much of a (panel, stage) task has been completed across every
 // technician who has logged work on it — see AppContext.startSession /
 // stopSession for how a session's contribution gets attributed and capped.
@@ -251,6 +224,26 @@ export const productionStages = [
 // AppContext.stopSession, which computes each session's connectionsCredited
 // as (percentAdded / 100) * the panel's target connection count).
 export const CONNECT_STAGE_KEY = "connect";
+export const CONNECT_STAGE_LABEL = productionStages.find((s) => s.key === CONNECT_STAGE_KEY)?.label;
+
+function stageStatsFromRows(rows, stage) {
+  const stageRows = rows.filter((h) => h.stage === stage.label);
+  if (stageRows.length === 0) return null;
+  const totalHours = stageRows.reduce((s, h) => s + (h.hours || 0), 0);
+  const completedTasks = stageRows.filter((h) => h.taskCompleted).length;
+  const totalConnections = stageRows.reduce((s, h) => s + (h.connectionsCredited || 0), 0);
+  return {
+    key: stage.key,
+    label: stage.label,
+    sessions: stageRows.length,
+    hours: Number(totalHours.toFixed(1)),
+    avgHours: stageRows.length ? Number((totalHours / stageRows.length).toFixed(2)) : 0,
+    completedTasks,
+    totalConnections,
+    connectionsPerHour: totalHours > 0 ? Number((totalConnections / totalHours).toFixed(1)) : 0,
+    technicians: new Set(stageRows.map((h) => h.employeeId)).size,
+  };
+}
 
 // Real per-employee output stats, computed from their actual logged work
 // (workHistory), broken down by production stage. Replaces what used to be a
@@ -259,23 +252,160 @@ export const CONNECT_STAGE_KEY = "connect";
 // average connections credited per hour (their real terminating rate).
 export function computeStageStats(workHistory, employeeId) {
   const mine = workHistory.filter((h) => h.employeeId === employeeId);
-  return productionStages
-    .map((stage) => {
-      const rows = mine.filter((h) => h.stage === stage.label);
-      if (rows.length === 0) return null;
-      const totalHours = rows.reduce((s, h) => s + (h.hours || 0), 0);
-      const completedTasks = rows.filter((h) => h.taskCompleted).length;
-      const totalConnections = rows.reduce((s, h) => s + (h.connectionsCredited || 0), 0);
-      return {
-        key: stage.key,
-        label: stage.label,
-        sessions: rows.length,
-        hours: Number(totalHours.toFixed(1)),
-        avgHours: rows.length ? Number((totalHours / rows.length).toFixed(2)) : 0,
-        completedTasks,
-        totalConnections,
-        connectionsPerHour: totalHours > 0 ? Number((totalConnections / totalHours).toFixed(1)) : 0,
-      };
-    })
-    .filter(Boolean);
+  return productionStages.map((stage) => stageStatsFromRows(mine, stage)).filter(Boolean);
+}
+
+// Team-wide equivalent of computeStageStats — every technician's sessions
+// combined, one row per production stage. This is the "how long does each
+// part of the build process actually take" view: total shop hours sunk
+// into a stage and the average hours a single task at that stage takes —
+// whichever stage has the highest avgHours (or the most totalHours) is
+// where the process is actually spending its time, i.e. the bottleneck.
+export function computeTeamStageStats(workHistory) {
+  return productionStages.map((stage) => stageStatsFromRows(workHistory, stage)).filter(Boolean);
+}
+
+// One row per employee with team-wide comparable KPIs — the "how does
+// everyone stack up" table. connectionsPerHour is scoped to hours actually
+// spent on Route/Terminate specifically (the only stage that produces a
+// connection count), not total hours, so it reflects real terminating
+// speed rather than being diluted by time spent on other stages.
+export function computeEmployeeLeaderboard(workHistory, employees) {
+  return employees.map((emp) => {
+    const rows = workHistory.filter((h) => h.employeeId === emp.id);
+    const totalHours = rows.reduce((s, h) => s + (h.hours || 0), 0);
+    const completedTasks = rows.filter((h) => h.taskCompleted).length;
+    const totalConnections = rows.reduce((s, h) => s + (h.connectionsCredited || 0), 0);
+    const connectHours = rows
+      .filter((h) => h.stage === CONNECT_STAGE_LABEL)
+      .reduce((s, h) => s + (h.hours || 0), 0);
+    return {
+      employeeId: emp.id,
+      name: emp.name,
+      role: emp.role,
+      sessions: rows.length,
+      hours: Number(totalHours.toFixed(1)),
+      completedTasks,
+      totalConnections,
+      connectionsPerHour: connectHours > 0 ? Number((totalConnections / connectHours).toFixed(1)) : 0,
+      attainmentPct: emp.attainmentPct ?? 0,
+    };
+  });
+}
+
+// Real daily hours trend from actual logged work, bucketed by the
+// session's real timestamp (workHistory[].createdAt) — replaces the
+// earlier generateDailyOutput() placeholder wherever a chart needs to show
+// actual output against a target rather than seeded-random demo data.
+// Returns the same shape generateDailyOutput did ({date, label, value,
+// target, aboveTarget}) so existing chart JSX didn't need to change, just
+// its data source.
+export function computeDailyHoursTrend(workHistory, days = 30, target = 0) {
+  const byDate = new Map();
+  workHistory.forEach((h) => {
+    if (!h.createdAt) return;
+    const key = new Date(h.createdAt).toISOString().slice(0, 10);
+    byDate.set(key, (byDate.get(key) ?? 0) + (h.hours || 0));
+  });
+  const out = [];
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    const value = Number((byDate.get(key) ?? 0).toFixed(1));
+    out.push({
+      date: key,
+      label: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+      value,
+      target,
+      aboveTarget: value >= target,
+    });
+  }
+  return out;
+}
+
+// Same idea as computeDailyHoursTrend, but connections credited (Route/
+// Terminate only) instead of hours — "how many connections are we actually
+// making per day."
+export function computeDailyConnectionsTrend(workHistory, days = 30) {
+  const byDate = new Map();
+  workHistory.forEach((h) => {
+    if (!h.createdAt) return;
+    const key = new Date(h.createdAt).toISOString().slice(0, 10);
+    byDate.set(key, (byDate.get(key) ?? 0) + (h.connectionsCredited || 0));
+  });
+  const out = [];
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    out.push({
+      date: key,
+      label: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+      value: byDate.get(key) ?? 0,
+    });
+  }
+  return out;
+}
+
+// For any panel id with more than one build on file (see "repeat panel
+// builds" above), hours-per-build across those builds — reveals whether
+// the crew is getting faster at a repeat job (learning curve) or slower
+// (scope creep, different crew, etc). Skips ids where no build has actually
+// been worked yet, so a freshly-imported repeat order doesn't show up as a
+// zero-hour "build."
+export function computeRepeatBuildTrends(panels, workHistory) {
+  const byId = new Map();
+  panels.forEach((p) => {
+    if (!byId.has(p.id)) byId.set(p.id, []);
+    byId.get(p.id).push(p);
+  });
+  const trends = [];
+  byId.forEach((builds, id) => {
+    if (builds.length < 2) return;
+    const withStats = builds.map((p) => ({ panel: p, stats: computeBuildStats(workHistory, p) }));
+    if (!withStats.some((b) => b.stats.sessions > 0)) return;
+    trends.push({ id, builds: withStats });
+  });
+  return trends;
+}
+
+// Labor cost (hours actually logged × that technician's CURRENT pay rate —
+// pay rates aren't versioned historically, so a raise applies retroactively
+// to past hours here) against what each build was quoted for. This is
+// deliberately admin-eyes-only data — this page already sits behind admin
+// login — and is the number that actually answers "are we pricing jobs
+// like this correctly."
+export function computeCostSummary(panels, workHistory, employees) {
+  const payRateById = new Map(employees.map((e) => [e.id, e.payRate || 0]));
+  let totalLaborCost = 0;
+  let totalRevenue = 0;
+  const perPanel = panels.map((p) => {
+    const stats = computeBuildStats(workHistory, p);
+    const tag = `#${p.id}`;
+    const rows = workHistory.filter((h) => h.panel === tag && h.buildId === p.buildId);
+    const laborCost = rows.reduce((s, h) => s + (h.hours || 0) * (payRateById.get(h.employeeId) || 0), 0);
+    const revenue = p.price || 0;
+    totalLaborCost += laborCost;
+    totalRevenue += revenue;
+    return {
+      buildId: p.buildId,
+      id: p.id,
+      jobNumber: p.jobNumber,
+      customer: p.customer,
+      revenue,
+      laborCost: Number(laborCost.toFixed(2)),
+      margin: Number((revenue - laborCost).toFixed(2)),
+      marginPct: revenue > 0 ? Math.round(((revenue - laborCost) / revenue) * 100) : null,
+      hours: stats.hours,
+    };
+  });
+  return {
+    totalLaborCost: Number(totalLaborCost.toFixed(2)),
+    totalRevenue: Number(totalRevenue.toFixed(2)),
+    totalMargin: Number((totalRevenue - totalLaborCost).toFixed(2)),
+    perPanel: perPanel.filter((p) => p.hours > 0).sort((a, b) => b.hours - a.hours),
+  };
 }

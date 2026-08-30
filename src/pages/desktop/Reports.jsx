@@ -1,9 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AreaChart,
   Area,
-  BarChart,
-  Bar,
   XAxis,
   YAxis,
   Tooltip,
@@ -11,17 +9,54 @@ import {
   CartesianGrid,
 } from "recharts";
 import { useApp } from "../../context/AppContext";
-import { ROLES, ROLE_META, generateDailyOutput } from "../../data/mockData";
-import { Card, SectionTitle, StatCard, RoleBadge, Button, formatNumber } from "../../components/ui";
+import {
+  ROLES,
+  computeDailyHoursTrend,
+  computeDailyConnectionsTrend,
+  computeTeamStageStats,
+  computeEmployeeLeaderboard,
+  computeRepeatBuildTrends,
+  computeCostSummary,
+} from "../../data/mockData";
+import { Card, SectionTitle, StatCard, RoleBadge, Button, formatNumber, formatCurrency } from "../../components/ui";
 
-const RANGE_OPTIONS = ["This Month", "Last 7 Days", "Last 30 Days", "Custom"];
+// Days back from today each range covers — null means no cutoff at all.
+// "Custom" date-range picking isn't implemented; these four cover the
+// ranges a shop actually checks day to day.
+const RANGE_OPTIONS = [
+  { label: "Last 7 Days", days: 7 },
+  { label: "Last 30 Days", days: 30 },
+  { label: "Last 90 Days", days: 90 },
+  { label: "All Time", days: null },
+];
 const ROLE_FILTERS = ["All Roles", ...Object.values(ROLES)];
 
 export default function Reports() {
-  const { employees, roleDefaults, workHistory } = useApp();
-  const [range, setRange] = useState("This Month");
+  const { employees, roleDefaults, workHistory, panels } = useApp();
+  const [range, setRange] = useState(RANGE_OPTIONS[1]);
   const [roleFilter, setRoleFilter] = useState("All Roles");
   const [employeeFilter, setEmployeeFilter] = useState("All Employees");
+  const [sortBy, setSortBy] = useState("hours");
+
+  // "Now" as component state (rather than calling Date.now() directly in
+  // the render body) — same pattern used in AdminHome.jsx/PanelDetailModal.jsx.
+  // Refreshed every minute so the range cutoff doesn't quietly go stale on a
+  // console left open all shift.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Every KPI on this page (besides Cost & Margin, which is deliberately
+  // all-time — see computeCostSummary) is derived from this one filtered
+  // slice, so the range picker and the two roster filters below all apply
+  // consistently everywhere at once.
+  const rangeCutoff = useMemo(() => (range.days ? now - range.days * 86400000 : null), [range.days, now]);
+  const rangeFilteredHistory = useMemo(
+    () => (rangeCutoff ? workHistory.filter((h) => h.createdAt && new Date(h.createdAt).getTime() >= rangeCutoff) : workHistory),
+    [workHistory, rangeCutoff]
+  );
 
   const filteredEmployees = useMemo(
     () =>
@@ -32,88 +67,112 @@ export default function Reports() {
       }),
     [employees, roleFilter, employeeFilter]
   );
+  const filteredEmployeeIds = useMemo(() => new Set(filteredEmployees.map((e) => e.id)), [filteredEmployees]);
+  const filteredHistory = useMemo(
+    () => rangeFilteredHistory.filter((h) => filteredEmployeeIds.has(h.employeeId)),
+    [rangeFilteredHistory, filteredEmployeeIds]
+  );
 
-  const chartData = useMemo(
-    () =>
-      generateDailyOutput(
-        30,
-        employees.reduce((sum, e) => sum + (e.override ?? roleDefaults[e.role].daily), 0)
-      ),
+  const chartDays = range.days ?? 90;
+  const dailyTarget = useMemo(
+    () => employees.reduce((sum, e) => sum + (e.override ?? roleDefaults[e.role].daily), 0),
     [employees, roleDefaults]
   );
-  const totalHours = chartData.reduce((s, d) => s + d.value, 0);
+  const hoursTrend = useMemo(
+    () => computeDailyHoursTrend(filteredHistory, chartDays, dailyTarget),
+    [filteredHistory, chartDays, dailyTarget]
+  );
+  const connectionsTrend = useMemo(
+    () => computeDailyConnectionsTrend(filteredHistory, chartDays),
+    [filteredHistory, chartDays]
+  );
+
+  const totalHours = useMemo(() => Number(filteredHistory.reduce((s, h) => s + (h.hours || 0), 0).toFixed(1)), [filteredHistory]);
+  const totalConnections = useMemo(
+    () => filteredHistory.reduce((s, h) => s + (h.connectionsCredited || 0), 0),
+    [filteredHistory]
+  );
+  const panelsShipped = useMemo(
+    () => filteredHistory.filter((h) => h.stage === "QC/Wrap" && h.taskCompleted).length,
+    [filteredHistory]
+  );
 
   const avgAttainment = useMemo(() => {
     if (!filteredEmployees.length) return 0;
-    return Math.round(
-      filteredEmployees.reduce((s, e) => s + e.attainmentPct, 0) / filteredEmployees.length
-    );
+    return Math.round(filteredEmployees.reduce((s, e) => s + e.attainmentPct, 0) / filteredEmployees.length);
   }, [filteredEmployees]);
 
-  const topPerformer = useMemo(() => {
-    if (!filteredEmployees.length) return null;
-    return [...filteredEmployees].sort((a, b) => b.attainmentPct - a.attainmentPct)[0];
-  }, [filteredEmployees]);
-
-  // Hours logged per role, derived from real work history — not a fixture.
-  const outputByRole = useMemo(() => {
-    const totals = {};
-    Object.values(ROLES).forEach((r) => (totals[r] = 0));
-    workHistory.forEach((h) => {
-      const emp = employees.find((e) => e.id === h.employeeId);
-      if (emp) totals[emp.role] += h.hours;
-    });
-    return Object.entries(totals).map(([role, value]) => ({ role, value: Number(value.toFixed(1)) }));
-  }, [workHistory, employees]);
-
-  const filteredOutputByRole = useMemo(() => {
-    const source = roleFilter === "All Roles" ? outputByRole : outputByRole.filter((r) => r.role === roleFilter);
-    const max = Math.max(...source.map((r) => r.value), 1);
-    return source.map((r) => ({ ...r, pct: (r.value / max) * 100 }));
-  }, [outputByRole, roleFilter]);
-
-  const panelsShipped = useMemo(
-    () => workHistory.filter((h) => h.stage === "QC/Wrap" && h.taskCompleted).length,
-    [workHistory]
+  // The "how long does each part of the process take" breakdown — team
+  // hours summed per production stage, sorted so the biggest time sink
+  // (the actual bottleneck) is on top.
+  const stageStats = useMemo(
+    () => [...computeTeamStageStats(filteredHistory)].sort((a, b) => b.hours - a.hours),
+    [filteredHistory]
   );
+  const maxStageHours = Math.max(...stageStats.map((s) => s.hours), 1);
 
-  function exportAs(kind) {
-    // Client-side "export": builds a CSV/text blob from live state and triggers a download.
+  // The "how does everyone stack up" comparison table.
+  const leaderboard = useMemo(
+    () => computeEmployeeLeaderboard(filteredHistory, filteredEmployees),
+    [filteredHistory, filteredEmployees]
+  );
+  const sortedLeaderboard = useMemo(() => {
+    const withAttainment = leaderboard.map((r) => ({
+      ...r,
+      attainmentPct: filteredEmployees.find((e) => e.id === r.employeeId)?.attainmentPct ?? 0,
+    }));
+    return [...withAttainment].sort((a, b) => (b[sortBy] ?? 0) - (a[sortBy] ?? 0));
+  }, [leaderboard, filteredEmployees, sortBy]);
+
+  // Repeat-build learning-curve view and the cost/margin summary are both
+  // deliberately all-time (not range-filtered) — a build-to-build trend or
+  // a job's total labor cost doesn't mean much sliced to "the last 7 days."
+  const repeatBuilds = useMemo(() => computeRepeatBuildTrends(panels, workHistory), [panels, workHistory]);
+  const costSummary = useMemo(() => computeCostSummary(panels, workHistory, employees), [panels, workHistory, employees]);
+
+  function exportCsv() {
     const rows = [
-      ["Employee", "Role", "Current Week Avg", "Attainment %"],
-      ...filteredEmployees.map((e) => [e.name, e.role, e.currentWeekAvg, e.attainmentPct]),
+      ["Employee", "Role", "Sessions", "Hours", "Tasks Completed", "Connections", "Connections/Hr", "Attainment %"],
+      ...sortedLeaderboard.map((r) => [r.name, r.role, r.sessions, r.hours, r.completedTasks, r.totalConnections, r.connectionsPerHour, r.attainmentPct]),
     ];
     const content = rows.map((r) => r.join(",")).join("\n");
-    const blob = new Blob([content], { type: kind === "csv" ? "text/csv" : "text/plain" });
+    const blob = new Blob([content], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `performance-report.${kind === "csv" ? "csv" : "txt"}`;
+    a.download = `assemblyos-kpis-${range.label.toLowerCase().replace(/\s+/g, "-")}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto">
-      <div className="flex items-start justify-between mb-6 flex-wrap gap-3">
+      <div className="flex items-start justify-between mb-6 flex-wrap gap-3 print:hidden">
         <div>
-          <h1 className="text-xl font-bold text-ink-900">Performance Reports</h1>
-          <p className="text-sm text-ink-500 mt-1">Run and review employee control panel production metrics</p>
+          <h1 className="text-xl font-bold text-ink-900">Analytics &amp; KPIs</h1>
+          <p className="text-sm text-ink-500 mt-1">
+            Connections, time per build stage, and individual performance — computed live from logged work
+          </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="ghost" onClick={() => exportAs("csv")}>Export CSV</Button>
-          <Button onClick={() => exportAs("pdf")}>Generate Report</Button>
+          <Button variant="ghost" onClick={exportCsv}>Export CSV</Button>
+          <Button onClick={() => window.print()}>Print / Save as PDF</Button>
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-3 mb-6">
+      <div className="hidden print:block mb-4">
+        <h1 className="text-lg font-bold text-ink-900">AssemblyOS — Analytics &amp; KPIs</h1>
+        <p className="text-xs text-ink-500">{range.label} · Generated {new Date().toLocaleString()}</p>
+      </div>
+
+      <div className="flex flex-wrap gap-3 mb-6 print:hidden">
         <select
-          value={range}
-          onChange={(e) => setRange(e.target.value)}
+          value={range.label}
+          onChange={(e) => setRange(RANGE_OPTIONS.find((r) => r.label === e.target.value))}
           className="rounded-lg border border-paper-200 bg-white px-3 py-2 text-[13px] font-medium text-ink-700"
         >
           {RANGE_OPTIONS.map((o) => (
-            <option key={o}>{o}</option>
+            <option key={o.label}>{o.label}</option>
           ))}
         </select>
         <select
@@ -138,76 +197,216 @@ export default function Reports() {
       </div>
 
       <div className="flex flex-wrap gap-4 mb-6">
-        <StatCard label="Team Total Hours" value={formatNumber(totalHours)} sub="This 30-day period" accent="text-brand-600" />
+        <StatCard label="Total Hours" value={formatNumber(totalHours)} sub={range.label} accent="text-brand-600" />
+        <StatCard label="Total Connections" value={formatNumber(totalConnections)} sub="Route/Terminate stage" accent="text-good-600" />
         <StatCard label="AVG Goal Attainment" value={`${avgAttainment}%`} sub="Target: 100% Sustained" />
-        <StatCard label="Top Performer" value={topPerformer ? topPerformer.name.split(" ")[0] + " " + topPerformer.name.split(" ")[1][0] + "." : "—"} sub={topPerformer ? `${topPerformer.attainmentPct}% attainment` : ""} />
         <StatCard label="Panels Shipped" value={panelsShipped} sub="QC/Wrap completed" />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-6">
-        <Card className="lg:col-span-2">
-          <SectionTitle title="Daily Team Hours Logged" subtitle={`Total: ${formatNumber(totalHours)} hrs`} />
-          <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
+        <Card>
+          <SectionTitle title="Daily Hours Logged" subtitle={`${formatNumber(totalHours)} hrs total · ${range.label}`} />
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={hoursTrend} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
               <defs>
-                <linearGradient id="fillOutput" x1="0" y1="0" x2="0" y2="1">
+                <linearGradient id="fillHours" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#3b6fe0" stopOpacity={0.35} />
                   <stop offset="95%" stopColor="#3b6fe0" stopOpacity={0.02} />
                 </linearGradient>
               </defs>
               <CartesianGrid vertical={false} stroke="#eef2f6" />
-              <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#6b7a88" }} axisLine={false} tickLine={false} interval={4} />
+              <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#6b7a88" }} axisLine={false} tickLine={false} interval={Math.ceil(chartDays / 8)} />
               <YAxis tick={{ fontSize: 10, fill: "#6b7a88" }} axisLine={false} tickLine={false} tickFormatter={(v) => formatNumber(v)} />
-              <Tooltip formatter={(v) => [`${formatNumber(v)} hours`, "Output"]} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8ee" }} />
-              <Area type="monotone" dataKey="value" stroke="#3b6fe0" strokeWidth={2} fill="url(#fillOutput)" />
+              <Tooltip formatter={(v) => [`${formatNumber(v)} hours`, "Logged"]} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8ee" }} />
+              <Area type="monotone" dataKey="value" stroke="#3b6fe0" strokeWidth={2} fill="url(#fillHours)" />
             </AreaChart>
           </ResponsiveContainer>
         </Card>
 
         <Card>
-          <SectionTitle title="Output by Assembly Role" />
-          <div className="space-y-4 mt-2">
-            {filteredOutputByRole.map((r) => {
-              const meta = ROLE_META[r.role];
-              return (
-                <div key={r.role}>
-                  <div className="flex items-center justify-between mb-1">
-                    <RoleBadge role={r.role} />
-                    <span className="text-xs font-semibold text-ink-900">{formatNumber(r.value)}</span>
-                  </div>
-                  <div className="h-2 rounded-full bg-paper-100 overflow-hidden">
-                    <div className={`h-full rounded-full ${meta.dot}`} style={{ width: `${r.pct}%` }} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <SectionTitle title="Daily Connections" subtitle={`${formatNumber(totalConnections)} total · ${range.label}`} />
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={connectionsTrend} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+              <defs>
+                <linearGradient id="fillConnections" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#1fa971" stopOpacity={0.35} />
+                  <stop offset="95%" stopColor="#1fa971" stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid vertical={false} stroke="#eef2f6" />
+              <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#6b7a88" }} axisLine={false} tickLine={false} interval={Math.ceil(chartDays / 8)} />
+              <YAxis tick={{ fontSize: 10, fill: "#6b7a88" }} axisLine={false} tickLine={false} tickFormatter={(v) => formatNumber(v)} />
+              <Tooltip formatter={(v) => [`${formatNumber(v)} connections`, "Made"]} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8ee" }} />
+              <Area type="monotone" dataKey="value" stroke="#1fa971" strokeWidth={2} fill="url(#fillConnections)" />
+            </AreaChart>
+          </ResponsiveContainer>
         </Card>
       </div>
 
-      <SectionTitle title="Employee Performance" subtitle={`${filteredEmployees.length} technician(s) matching filters`} />
-      <Card padded={false} className="overflow-x-auto">
+      <SectionTitle
+        title="Time by Build Stage"
+        subtitle="Total shop hours and average time per task at each stage — the biggest bar is where the process is actually spending its time"
+      />
+      <Card className="mb-8">
+        {stageStats.length === 0 ? (
+          <p className="text-xs text-ink-400 text-center py-6">No work logged yet in this range.</p>
+        ) : (
+          <div className="space-y-3.5">
+            {stageStats.map((s) => (
+              <div key={s.key}>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[13px] font-medium text-ink-900">{s.label}</span>
+                  <span className="text-[11px] text-ink-500">
+                    {formatNumber(s.hours)} hrs total · avg {s.avgHours} hrs/task · {s.sessions} session{s.sessions === 1 ? "" : "s"} ·{" "}
+                    {s.technicians} tech{s.technicians === 1 ? "" : "s"}
+                    {s.key === "connect" && s.totalConnections > 0 ? ` · ${formatNumber(s.totalConnections)} connections` : ""}
+                  </span>
+                </div>
+                <div className="h-2.5 rounded-full bg-paper-100 overflow-hidden">
+                  <div className="h-full rounded-full bg-brand-500" style={{ width: `${(s.hours / maxStageHours) * 100}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <SectionTitle
+        title="Employee Performance"
+        subtitle={`${filteredEmployees.length} technician(s) matching filters · sorted by ${sortBy === "hours" ? "hours" : sortBy === "totalConnections" ? "connections" : sortBy === "connectionsPerHour" ? "connections/hr" : "attainment"}`}
+      />
+      <Card padded={false} className="overflow-x-auto mb-8">
         <table className="w-full text-[13px]">
           <thead>
             <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
               <th className="px-4 py-3 font-semibold">Employee</th>
               <th className="px-4 py-3 font-semibold">Role</th>
-              <th className="px-4 py-3 font-semibold">Current Week Avg</th>
-              <th className="px-4 py-3 font-semibold">Attainment</th>
+              <SortableHeader label="Sessions" field="sessions" sortBy={sortBy} onSort={setSortBy} />
+              <SortableHeader label="Hours" field="hours" sortBy={sortBy} onSort={setSortBy} />
+              <SortableHeader label="Tasks Completed" field="completedTasks" sortBy={sortBy} onSort={setSortBy} />
+              <SortableHeader label="Connections" field="totalConnections" sortBy={sortBy} onSort={setSortBy} />
+              <SortableHeader label="Conn/Hr" field="connectionsPerHour" sortBy={sortBy} onSort={setSortBy} />
+              <SortableHeader label="Attainment" field="attainmentPct" sortBy={sortBy} onSort={setSortBy} />
             </tr>
           </thead>
           <tbody>
-            {filteredEmployees.map((e, i) => (
-              <tr key={e.id} className={`border-b border-paper-100 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
-                <td className="px-4 py-2.5 font-medium text-ink-900">{e.name}</td>
-                <td className="px-4 py-2.5"><RoleBadge role={e.role} /></td>
-                <td className="px-4 py-2.5 text-ink-700">{e.currentWeekAvg}</td>
-                <td className="px-4 py-2.5 font-semibold text-ink-900">{e.attainmentPct}%</td>
+            {sortedLeaderboard.length === 0 && (
+              <tr>
+                <td colSpan={8} className="px-4 py-8 text-center text-xs text-ink-400">
+                  No technicians match these filters.
+                </td>
+              </tr>
+            )}
+            {sortedLeaderboard.map((r, i) => (
+              <tr key={r.employeeId} className={`border-b border-paper-100 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
+                <td className="px-4 py-2.5 font-medium text-ink-900">{r.name}</td>
+                <td className="px-4 py-2.5"><RoleBadge role={r.role} /></td>
+                <td className="px-4 py-2.5 text-ink-700">{r.sessions}</td>
+                <td className="px-4 py-2.5 text-ink-700">{r.hours}</td>
+                <td className="px-4 py-2.5 text-ink-700">{r.completedTasks}</td>
+                <td className="px-4 py-2.5 text-ink-700">{formatNumber(r.totalConnections)}</td>
+                <td className="px-4 py-2.5 text-ink-700">{r.connectionsPerHour || "—"}</td>
+                <td className="px-4 py-2.5 font-semibold text-ink-900">{r.attainmentPct}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+
+      {repeatBuilds.length > 0 && (
+        <>
+          <SectionTitle
+            title="Repeat Build Trends"
+            subtitle="Panels built more than once — hours per build, oldest to newest, so you can see if the crew is getting faster on a repeat job"
+          />
+          <Card className="mb-8 space-y-5">
+            {repeatBuilds.map(({ id, builds }) => {
+              const maxHours = Math.max(...builds.map((b) => b.stats.hours), 1);
+              return (
+                <div key={id}>
+                  <p className="text-[13px] font-semibold text-ink-900 mb-2">Panel #{id} · {builds.length} builds on file</p>
+                  <div className="flex items-end gap-2 h-20">
+                    {builds.map((b, i) => (
+                      <div key={b.panel.buildId} className="flex-1 flex flex-col items-center justify-end gap-1">
+                        <span className="text-[10px] text-ink-500">{b.stats.hours || "—"}</span>
+                        <div
+                          className={`w-full rounded-t ${i === builds.length - 1 ? "bg-brand-500" : "bg-paper-200"}`}
+                          style={{ height: `${Math.max(4, (b.stats.hours / maxHours) * 100)}%` }}
+                          title={`Job #${b.panel.jobNumber || "—"} · ${b.stats.hours} hrs`}
+                        />
+                        <span className="text-[9px] text-ink-400 truncate w-full text-center">
+                          {b.panel.jobNumber || "—"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </Card>
+        </>
+      )}
+
+      <SectionTitle title="Cost &amp; Margin" subtitle="All time · labor cost is hours logged × each technician's current pay rate" />
+      <div className="flex flex-wrap gap-4 mb-4">
+        <StatCard label="Quoted Revenue" value={formatCurrency(costSummary.totalRevenue)} sub="All panels on file" />
+        <StatCard label="Labor Cost" value={formatCurrency(costSummary.totalLaborCost)} sub="Hours logged × pay rate" accent="text-warn-600" />
+        <StatCard
+          label="Margin"
+          value={formatCurrency(costSummary.totalMargin)}
+          sub={costSummary.totalRevenue > 0 ? `${Math.round((costSummary.totalMargin / costSummary.totalRevenue) * 100)}% of revenue` : ""}
+          accent={costSummary.totalMargin >= 0 ? "text-good-600" : "text-bad-600"}
+        />
+      </div>
+      <Card padded={false} className="overflow-x-auto mb-8">
+        <table className="w-full text-[13px]">
+          <thead>
+            <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
+              <th className="px-4 py-3 font-semibold">Panel</th>
+              <th className="px-4 py-3 font-semibold">Customer</th>
+              <th className="px-4 py-3 font-semibold">Hours</th>
+              <th className="px-4 py-3 font-semibold">Revenue</th>
+              <th className="px-4 py-3 font-semibold">Labor Cost</th>
+              <th className="px-4 py-3 font-semibold">Margin</th>
+            </tr>
+          </thead>
+          <tbody>
+            {costSummary.perPanel.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-4 py-8 text-center text-xs text-ink-400">
+                  No panels with logged work yet.
+                </td>
+              </tr>
+            )}
+            {costSummary.perPanel.slice(0, 25).map((p, i) => (
+              <tr key={p.buildId} className={`border-b border-paper-100 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
+                <td className="px-4 py-2.5 font-medium text-ink-900">#{p.id}{p.jobNumber ? ` · Job ${p.jobNumber}` : ""}</td>
+                <td className="px-4 py-2.5 text-ink-600">{p.customer}</td>
+                <td className="px-4 py-2.5 text-ink-700">{p.hours}</td>
+                <td className="px-4 py-2.5 text-ink-700">{formatCurrency(p.revenue)}</td>
+                <td className="px-4 py-2.5 text-ink-700">{formatCurrency(p.laborCost)}</td>
+                <td className={`px-4 py-2.5 font-semibold ${p.margin >= 0 ? "text-good-600" : "text-bad-600"}`}>
+                  {formatCurrency(p.margin)}{p.marginPct !== null ? ` (${p.marginPct}%)` : ""}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </Card>
     </div>
+  );
+}
+
+function SortableHeader({ label, field, sortBy, onSort }) {
+  const active = sortBy === field;
+  return (
+    <th className="px-4 py-3 font-semibold">
+      <button
+        onClick={() => onSort(field)}
+        className={`flex items-center gap-1 uppercase tracking-wide text-[11px] ${active ? "text-brand-600" : "text-ink-500 hover:text-ink-700"}`}
+      >
+        {label} {active && <span aria-hidden="true">↓</span>}
+      </button>
+    </th>
   );
 }

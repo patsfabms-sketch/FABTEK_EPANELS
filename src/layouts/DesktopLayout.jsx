@@ -6,7 +6,7 @@ import { SaveErrorBanner, LoadingScreen } from "../components/ui";
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: DashboardIcon },
   { to: "/panels", label: "Panels", icon: PanelsIcon },
-  { to: "/reports", label: "Reports", icon: ReportsIcon },
+  { to: "/reports", label: "Analytics", icon: ReportsIcon },
   { to: "/goals", label: "Goals", icon: GoalsIcon },
   { to: "/team", label: "Team", icon: TeamIcon },
   { to: "/estimates", label: "Estimates", icon: EstimatesIcon },
@@ -23,7 +23,7 @@ export default function DesktopLayout() {
     <div className="min-h-screen flex flex-col bg-paper-50">
       <SaveErrorBanner saveError={saveError} />
       <div className="flex-1 flex min-h-0">
-      <aside className="w-56 shrink-0 bg-ink-950 text-paper-100 flex flex-col">
+      <aside className="w-56 shrink-0 bg-ink-950 text-paper-100 flex flex-col print:hidden">
         <div className="px-5 py-5 flex items-center gap-2 border-b border-white/10">
           <div className="w-7 h-7 rounded-lg bg-brand-500 flex items-center justify-center font-bold text-sm">
             A

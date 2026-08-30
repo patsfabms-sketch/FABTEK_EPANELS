@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
-import { initialRoleDefaults, attainment, taskProgress, generateUsername, productionStages } from "../data/mockData";
+import { initialRoleDefaults, attainment, taskProgress, generateUsername, CONNECT_STAGE_LABEL } from "../data/mockData";
 
 const AppContext = createContext(null);
 
@@ -10,10 +10,6 @@ const AppContext = createContext(null);
 // activity feed) lives in Supabase and is shared by every device; see the
 // fetch + realtime-subscription effects below.
 const DEVICE_STORAGE_KEY = "assemblyos-device-v1";
-
-// The one stage where progress logged translates directly into a connection
-// count — see stopSession below.
-const CONNECT_STAGE_LABEL = productionStages.find((s) => s.key === "connect")?.label;
 
 function loadDeviceState() {
   try {
@@ -150,6 +146,13 @@ function fromDbWorkHistory(row) {
     panels: row.panels ?? 1,
     hours: row.hours === null ? 0 : Number(row.hours),
     status: row.status ?? "Verified",
+    // Real timestamp (DB-assigned, `created_at default now()`) — used for
+    // bucketing analytics trend charts by actual calendar day, since `date`
+    // above is a display-only formatted string with no year in it. Not
+    // present until the row round-trips through the DB; see stopSession,
+    // which stamps a local approximation immediately so a just-logged
+    // session shows up in trend charts without waiting on that round trip.
+    createdAt: row.created_at ?? null,
   };
 }
 
@@ -750,6 +753,10 @@ export function AppProvider({ children }) {
       panels: 1,
       hours: Math.max(0.1, Number(hours.toFixed(1))),
       status: "Verified",
+      // Local approximation so this session shows up in analytics trend
+      // charts immediately, without waiting on the DB round trip that
+      // eventually confirms the real created_at (see fromDbWorkHistory).
+      createdAt: new Date().toISOString(),
     };
     setWorkHistory((prev) => [entry, ...prev]);
     supabase.from("assemblyos_work_history").insert(toDbWorkHistory(entry)).then(reportResult);

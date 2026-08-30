@@ -11,7 +11,7 @@ import {
   CartesianGrid,
 } from "recharts";
 import { useApp } from "../../context/AppContext";
-import { ROLES, ROLE_META, generateDailyOutput } from "../../data/mockData";
+import { ROLES, ROLE_META, computeDailyHoursTrend } from "../../data/mockData";
 import { Card, SectionTitle, RoleBadge, AttainmentPill, Button, formatNumber } from "../../components/ui";
 
 export default function Goals() {
@@ -24,6 +24,7 @@ export default function Goals() {
     applyGoalChanges,
     resetOverride,
     hasPendingChanges,
+    workHistory,
   } = useApp();
 
   const [editingRole, setEditingRole] = useState(null);
@@ -31,11 +32,12 @@ export default function Goals() {
 
   const chartData = useMemo(
     () =>
-      generateDailyOutput(
+      computeDailyHoursTrend(
+        workHistory,
         30,
         employees.reduce((sum, e) => sum + (e.override ?? roleDefaults[e.role].daily), 0)
       ),
-    [roleDefaults, employees]
+    [workHistory, roleDefaults, employees]
   );
 
   function handleApply() {

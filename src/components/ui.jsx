@@ -117,7 +117,7 @@ export function Button({ children, variant = "primary", className = "", ...props
 export function SaveErrorBanner({ saveError }) {
   if (!saveError) return null;
   return (
-    <div className="bg-bad-500 text-white text-[12px] font-semibold px-4 py-2 text-center shrink-0">
+    <div className="bg-bad-500 text-white text-[12px] font-semibold px-4 py-2 text-center shrink-0 print:hidden">
       Can't reach the AssemblyOS server — check your internet connection. Changes made now may not save or show up
       on other devices until it's back.
     </div>
@@ -142,6 +142,10 @@ export function LoadingScreen() {
 
 export function formatNumber(n) {
   return new Intl.NumberFormat("en-US").format(Math.round(n));
+}
+
+export function formatCurrency(n) {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
 }
 
 export function formatDate(iso) {
