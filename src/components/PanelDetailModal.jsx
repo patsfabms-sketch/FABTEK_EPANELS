@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import QRCode from "qrcode";
 import { useApp } from "../context/AppContext";
 import { panelQrValue, siblingBuilds, computeBuildStats, connectionsForPanel, taskProgress } from "../data/mockData";
+import { getPdfBlob } from "../data/pdfStore";
 import { Modal, Button, RoleBadge, formatNumber, formatDate } from "./ui";
 
 const SIZE_PRESETS = [
@@ -212,23 +213,7 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
       )}
 
       <div className="mt-6 pt-4 border-t border-paper-100 flex flex-wrap justify-end gap-2">
-        {panel.pdfDataUrl ? (
-          <a
-            href={panel.pdfDataUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold transition-colors bg-transparent text-ink-700 hover:bg-paper-100 border border-paper-200"
-          >
-            <DocIcon /> View Estimate PDF
-          </a>
-        ) : (
-          <span
-            title="No source PDF on file for this panel (imported from a CSV, or before PDF import was supported)"
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold bg-transparent text-ink-300 border border-paper-200 cursor-not-allowed"
-          >
-            <DocIcon /> View Estimate PDF
-          </span>
-        )}
+        <ViewPdfButton panel={panel} />
         <Button variant="subtle" onClick={() => downloadPanelQr(panel)}>
           <DownloadIcon /> Download QR Code
         </Button>
@@ -491,6 +476,79 @@ async function downloadPanelQr(panel) {
   } catch {
     // best-effort — if generation fails there's nothing else useful to do here
   }
+}
+
+const PDF_BUTTON_BASE_CLASS =
+  "inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold transition-colors";
+
+// The estimate PDF a panel was imported from lives in IndexedDB (see
+// data/pdfStore.js), keyed by panel.pdfId — panels only carry that short id,
+// not the file itself, so this fetches the actual Blob on click rather than
+// keeping every panel's PDF loaded in memory or in a plain href up front.
+// `panel.pdfDataUrl` is also still honored, for any panel saved back when
+// PDFs were embedded as data URLs directly (before this fix), so an older
+// panel's link keeps working without needing to be re-imported.
+function ViewPdfButton({ panel }) {
+  const [status, setStatus] = useState("idle"); // idle | loading | error
+  const hasPdf = Boolean(panel.pdfDataUrl || panel.pdfId);
+
+  if (!hasPdf) {
+    return (
+      <span
+        title="No source PDF on file for this panel (imported from a CSV, or before PDF import was supported)"
+        className={`${PDF_BUTTON_BASE_CLASS} bg-transparent text-ink-300 border border-paper-200 cursor-not-allowed`}
+      >
+        <DocIcon /> View Estimate PDF
+      </span>
+    );
+  }
+
+  async function handleClick() {
+    if (panel.pdfDataUrl) {
+      window.open(panel.pdfDataUrl, "_blank", "noopener");
+      return;
+    }
+    // Open the tab synchronously, in the same click, so it isn't blocked as
+    // a popup — its destination gets filled in once the blob is ready.
+    // Deliberately omits "noopener" here: that flag makes window.open()
+    // return null (no handle back to the new tab), which is exactly the
+    // handle this needs to fill in the URL once the blob is ready — sever
+    // the opener link manually instead, right after opening, which keeps
+    // the same isolation without losing the reference.
+    const win = window.open("", "_blank");
+    if (win) win.opener = null;
+    setStatus("loading");
+    try {
+      const blob = await getPdfBlob(panel.pdfId);
+      if (!blob || !win) {
+        win?.close();
+        setStatus("error");
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      win.location.href = url;
+      setStatus("idle");
+    } catch {
+      win?.close();
+      setStatus("error");
+    }
+  }
+
+  return (
+    <button
+      onClick={handleClick}
+      disabled={status === "loading"}
+      title={status === "error" ? "Couldn't find the saved PDF — try re-importing this estimate" : undefined}
+      className={`${PDF_BUTTON_BASE_CLASS} bg-transparent border ${
+        status === "error"
+          ? "text-bad-600 border-bad-200 hover:bg-bad-50"
+          : "text-ink-700 border-paper-200 hover:bg-paper-100"
+      }`}
+    >
+      <DocIcon />
+      {status === "loading" ? "Opening…" : status === "error" ? "Couldn't open — try again" : "View Estimate PDF"}
+    </button>
+  );
 }
 
 function StatBlock({ label, value }) {

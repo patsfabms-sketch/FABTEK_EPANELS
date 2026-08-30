@@ -101,6 +101,13 @@ export function AppProvider({ children }) {
     }
   );
 
+  // `saveError` surfaces this failing instead of the failure being silent
+  // (see SaveErrorBanner in components/ui.jsx, mounted in both layouts) —
+  // this is what used to make PDF uploads "disappear": the write would
+  // throw once localStorage filled up, get swallowed here, and nothing told
+  // anyone the save never happened.
+  const [saveError, setSaveError] = useState(false);
+
   useEffect(() => {
     try {
       window.localStorage.setItem(
@@ -119,8 +126,9 @@ export function AppProvider({ children }) {
           session,
         })
       );
+      setSaveError(false);
     } catch {
-      // storage unavailable (private mode, quota) — app still works, just won't persist
+      setSaveError(true);
     }
   }, [
     roleDefaults,
@@ -366,7 +374,9 @@ export function AppProvider({ children }) {
             price: r.price,
             jobNumber: r.jobNumber || current.jobNumber || "",
             poNumber: r.poNumber || current.poNumber || "",
-            pdfDataUrl: r.pdfDataUrl || current.pdfDataUrl || null,
+            // pdfId references the saved copy in IndexedDB (see data/pdfStore.js)
+            // — not the file itself, so this stays a small string either way.
+            pdfId: r.pdfId || current.pdfId || null,
             pdfFileName: r.pdfFileName || current.pdfFileName || null,
           };
         } else {
@@ -383,7 +393,7 @@ export function AppProvider({ children }) {
             jobNumber: r.jobNumber || "",
             poNumber: r.poNumber || "",
             dateAdded: today,
-            pdfDataUrl: r.pdfDataUrl || null,
+            pdfId: r.pdfId || null,
             pdfFileName: r.pdfFileName || null,
           });
         }
@@ -583,6 +593,7 @@ export function AppProvider({ children }) {
     admins,
     currentAdmin,
     session,
+    saveError,
     updateRoleDefault,
     setPendingOverride,
     applyGoalChanges,

@@ -107,6 +107,21 @@ export function Button({ children, variant = "primary", className = "", ...props
   );
 }
 
+// Shown whenever AppContext's persistence effect fails to write to
+// localStorage (quota exceeded, private browsing, storage disabled) — a
+// failure that used to be swallowed silently, so changes looked saved but
+// weren't. Both the desktop and mobile layout mount this so it's visible no
+// matter where the failure happens.
+export function SaveErrorBanner({ saveError }) {
+  if (!saveError) return null;
+  return (
+    <div className="bg-bad-500 text-white text-[12px] font-semibold px-4 py-2 text-center shrink-0">
+      Changes aren't saving — this browser's storage is full or unavailable. Free up space or try a different
+      browser/device before doing more work here, or it may be lost on reload.
+    </div>
+  );
+}
+
 export function formatNumber(n) {
   return new Intl.NumberFormat("en-US").format(Math.round(n));
 }

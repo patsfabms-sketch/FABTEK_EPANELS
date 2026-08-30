@@ -2,6 +2,7 @@ import { NavLink, Outlet, useNavigate, Link } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import Login from "../pages/mobile/Login";
 import AdminHome from "../pages/mobile/AdminHome";
+import { SaveErrorBanner } from "../components/ui";
 
 // No "Log Work" tab — work is logged automatically as a byproduct of
 // scanning into a panel and stopping the session (see AppContext.stopSession),
@@ -13,12 +14,13 @@ const TABS = [
 ];
 
 export default function MobileLayout() {
-  const { session, currentUser, currentAdmin } = useApp();
+  const { session, currentUser, currentAdmin, saveError } = useApp();
   const navigate = useNavigate();
 
   return (
     <div className="min-h-screen bg-ink-950 flex items-center justify-center py-8 px-4">
       <div className="w-full max-w-[400px] bg-paper-50 rounded-[2.25rem] border-8 border-ink-900 shadow-popover overflow-hidden flex flex-col h-[820px]">
+        <SaveErrorBanner saveError={saveError} />
         <div className="flex items-center justify-between px-5 pt-3 pb-1 text-[11px] font-semibold text-ink-900 shrink-0">
           <span>9:41</span>
           <span className="flex items-center gap-1 text-ink-500">

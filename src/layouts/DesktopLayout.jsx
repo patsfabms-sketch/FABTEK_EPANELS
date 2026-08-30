@@ -1,6 +1,7 @@
 import { NavLink, Outlet, Link } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import AdminLogin from "../pages/desktop/AdminLogin";
+import { SaveErrorBanner } from "../components/ui";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: DashboardIcon },
@@ -12,12 +13,14 @@ const NAV = [
 ];
 
 export default function DesktopLayout() {
-  const { currentAdmin, adminLogout } = useApp();
+  const { currentAdmin, adminLogout, saveError } = useApp();
 
   if (!currentAdmin) return <AdminLogin />;
 
   return (
-    <div className="min-h-screen flex bg-paper-50">
+    <div className="min-h-screen flex flex-col bg-paper-50">
+      <SaveErrorBanner saveError={saveError} />
+      <div className="flex-1 flex min-h-0">
       <aside className="w-56 shrink-0 bg-ink-950 text-paper-100 flex flex-col">
         <div className="px-5 py-5 flex items-center gap-2 border-b border-white/10">
           <div className="w-7 h-7 rounded-lg bg-brand-500 flex items-center justify-center font-bold text-sm">
@@ -72,9 +75,10 @@ export default function DesktopLayout() {
         </Link>
       </aside>
 
-      <main className="flex-1 min-w-0">
+      <main className="flex-1 min-w-0 overflow-y-auto">
         <Outlet />
       </main>
+      </div>
     </div>
   );
 }

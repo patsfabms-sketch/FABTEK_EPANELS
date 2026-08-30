@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "../../context/AppContext";
 import { parseEstimateCsv, parseEstimatePdf } from "../../data/estimateImport";
+import { savePdfBlob, generatePdfId } from "../../data/pdfStore";
 import { Card, SectionTitle, Button } from "../../components/ui";
 
 function readFileAsText(file) {
@@ -12,23 +13,26 @@ function readFileAsText(file) {
   });
 }
 
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result ?? ""));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
-
-// PDF imports carry the original document along with them (as a data URL) so
-// it can be opened again later from the panel detail view — "the original
-// document of the PDF estimate should also be available to view". CSV
+// PDF imports carry the original document along with them so it can be
+// opened again later from the panel detail view. The file itself is saved
+// once into IndexedDB (see data/pdfStore.js — NOT localStorage, which is
+// far too small for real PDFs and silently fails once full) and every panel
+// parsed off this one file shares that same saved copy via `pdfId`, rather
+// than each one embedding its own duplicate of the whole document. CSV
 // imports have no source document to attach.
 async function parseEstimateFile(file) {
   if (file.name.toLowerCase().endsWith(".pdf") || file.type === "application/pdf") {
-    const [{ rows, errors }, pdfDataUrl] = await Promise.all([parseEstimatePdf(file), readFileAsDataUrl(file)]);
-    return { rows: rows.map((r) => ({ ...r, pdfDataUrl, pdfFileName: file.name })), errors };
+    const { rows, errors } = await parseEstimatePdf(file);
+    let pdfId = null;
+    if (rows.length) {
+      pdfId = generatePdfId();
+      try {
+        await savePdfBlob(pdfId, file);
+      } catch {
+        pdfId = null; // import still proceeds — just without a viewable copy of this PDF
+      }
+    }
+    return { rows: rows.map((r) => ({ ...r, pdfId, pdfFileName: file.name })), errors };
   }
   return parseEstimateCsv(await readFileAsText(file));
 }
