@@ -1,0 +1,189 @@
+// ---------------------------------------------------------------------------
+// AssemblyOS mock data + generators.
+// This stands in for a real backend: every number that appears in the UI is
+// derived from this data (or computed live from it), not hard-coded per page.
+// ---------------------------------------------------------------------------
+
+// Admins are the people who can log into the manager desktop console — a
+// separate group from the technician roster (no role/pay rate/attainment).
+// password is null until the admin sets it themselves on first login.
+export const initialAdmins = [{ id: "admin1", name: "Pat Warren", username: "Pwarren", password: null }];
+
+export const ROLES = {
+  LEAD: "Lead Panel Technician",
+  TECH: "Panel Technician",
+};
+
+export const ROLE_META = {
+  [ROLES.LEAD]: {
+    unit: "hours",
+    unitShort: "hrs",
+    color: "text-[#5c3fc9]",
+    bg: "bg-[#f1edfd]",
+    dot: "bg-[#7c5cf0]",
+  },
+  [ROLES.TECH]: {
+    unit: "hours",
+    unitShort: "hrs",
+    color: "text-good-600",
+    bg: "bg-good-50",
+    dot: "bg-good-500",
+  },
+};
+
+// Team-wide defaults, editable on the Goal Management page. Hours worked per
+// day/week — the unit every technician's time is actually logged in, since
+// wiring work isn't done in countable discrete units (see taskProgress below).
+export const initialRoleDefaults = {
+  [ROLES.LEAD]: { daily: 7, weekly: 35 },
+  [ROLES.TECH]: { daily: 8, weekly: 40 },
+};
+
+// currentWeekAvg is the technician's measured average hours/day this week —
+// this is the "actual" side of the attainment calculation. Starts empty —
+// add real technicians from the Team page.
+export const initialEmployees = [];
+
+export function attainment(employee, roleDefaults) {
+  const target = employee.override ?? roleDefaults[employee.role].daily;
+  if (!target) return 0;
+  return Math.round((employee.currentWeekAvg / target) * 100);
+}
+
+export function attainmentTone(pct) {
+  if (pct >= 100) return "good";
+  if (pct >= 90) return "warn";
+  return "bad";
+}
+
+// first initial + last name, lowercased, deduped against existing usernames
+// by appending a number (mvance, mvance2, mvance3, ...).
+export function generateUsername(name, existingUsernames = []) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  const first = (parts[0]?.[0] ?? "u").toLowerCase();
+  const last = (parts[parts.length - 1] ?? "ser").toLowerCase().replace(/[^a-z]/g, "");
+  const base = `${first}${last}` || "user";
+  let username = base;
+  let n = 2;
+  while (existingUsernames.includes(username)) {
+    username = `${base}${n}`;
+    n += 1;
+  }
+  return username;
+}
+
+
+// 30 operational days of team-wide hours logged, used by both the Goal
+// Management chart and the Reports chart.
+export function generateDailyOutput(days = 30, target = 120) {
+  const out = [];
+  const today = new Date();
+  let seed = 42;
+  const rand = () => {
+    seed = (seed * 9301 + 49297) % 233280;
+    return seed / 233280;
+  };
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const wobble = (rand() - 0.45) * 0.28;
+    const value = Math.max(Math.round(target * 0.5), Math.round(target * (1 + wobble)));
+    out.push({
+      date: d.toISOString().slice(0, 10),
+      label: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+      value,
+      target,
+      aboveTarget: value >= target,
+    });
+  }
+  return out;
+}
+
+// Sums how much of a (panel, stage) task has been completed across every
+// technician who has logged work on it — see AppContext.startSession /
+// stopSession for how a session's contribution gets attributed and capped.
+export function taskProgress(workHistory, panelTag, stage) {
+  const total = workHistory
+    .filter((h) => h.panel === panelTag && h.stage === stage)
+    .reduce((sum, h) => sum + (h.percentAdded ?? 0), 0);
+  return Math.max(0, Math.min(100, total));
+}
+
+// Everything below starts empty — this app ships with no fake people, panels,
+// or history. The manager adds real technicians (Team page), imports a real
+// QuickBooks estimate (Estimates page), and real work history/active sessions
+// accumulate from there as technicians actually log in and work.
+export const initialActivityFeed = [];
+
+// employeeId ties an entry back to whoever logged it — mobile pages (Home,
+// History, Profile) filter this down to just the signed-in technician's own
+// entries; the manager Panels page reads the full, unfiltered list.
+//
+// percentAdded is how much of the (panel, stage) task this session's
+// contribution represents, in the technician's own estimate (10% increments).
+// A task isn't "done" until contributions across everyone who worked it sum
+// to 100 — see taskProgress() above — so credit for a task finished across
+// multiple people/days splits by what each person actually reported adding.
+export const initialWorkHistory = [];
+
+// Technicians currently scanned into a panel right now, live — multiple
+// people can be on the same panel doing different stages simultaneously.
+export const initialActiveSessions = [];
+
+// Default $/connection used to derive a panel's expected connection count from
+// its QuickBooks estimate amount. Managers can adjust this on the Dashboard.
+export const initialPricePerConnection = 0.75;
+
+// Panel registry — populated by importing a QuickBooks estimate CSV on the
+// manager Estimates page. `price` is the estimate line amount for the panel;
+// its connection count is derived from price / pricePerConnection, not stored.
+export const initialPanels = [];
+
+export function connectionsForPanel(panel, pricePerConnection) {
+  if (!panel || !pricePerConnection) return 0;
+  return Math.round(panel.price / pricePerConnection);
+}
+
+// The string encoded into a panel's printed QR code. Kept as a single,
+// namespaced convention (rather than the bare panel id) so a future real
+// camera-scan implementation on the mobile app can reliably recognize an
+// AssemblyOS panel sticker versus any other QR code someone might point the
+// camera at.
+export function panelQrValue(panel) {
+  return `ASSEMBLYOS:PANEL:${panel.id}`;
+}
+
+// Stages a technician can pick after scanning a panel's QR code.
+export const productionStages = [
+  { key: "verify", label: "Verifying Packout" },
+  { key: "sort", label: "Sorting" },
+  { key: "build", label: "Control Panel Build" },
+  { key: "connect", label: "Route/Terminate" },
+  { key: "test", label: "Continuity Test" },
+  { key: "ship", label: "QC/Wrap" },
+  { key: "rework", label: "Rework" },
+  { key: "subbuild", label: "Agastat Sub. Assm." },
+  { key: "auxpanel", label: "Aux Panel Build" },
+  { key: "auxswitch", label: "Aux Switch Assm." },
+];
+
+// Deterministic per-employee breakdown of logged work by production stage —
+// stands in for real per-task history until sessions are attributed to every
+// technician (only the mobile demo user currently produces real workHistory).
+export function generateStageBreakdown(employee) {
+  const seedStr = employee.id + employee.role;
+  let seed = 0;
+  for (let i = 0; i < seedStr.length; i++) seed = (seed * 31 + seedStr.charCodeAt(i)) % 100000;
+  const rand = () => {
+    seed = (seed * 9301 + 49297) % 233280;
+    return seed / 233280;
+  };
+
+  return productionStages.map((stage) => {
+    const isCore = stage.key === "build" || stage.key === "connect";
+    const sessions = Math.round(rand() * 8) + (isCore ? 5 : 1);
+    const hours = Number((sessions * (0.6 + rand() * 1.3)).toFixed(1));
+    const completedTasks = Math.max(1, Math.round(sessions * (0.55 + rand() * 0.35)));
+    return { key: stage.key, label: stage.label, sessions, hours, completedTasks };
+  });
+}
