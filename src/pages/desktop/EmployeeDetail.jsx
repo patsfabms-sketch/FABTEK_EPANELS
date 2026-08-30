@@ -13,9 +13,14 @@ const TONE_ACCENT = {
 export default function EmployeeDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { employees, roleDefaults, workHistory } = useApp();
+  const { employees, roleDefaults, workHistory, panels } = useApp();
 
   const employee = employees.find((e) => e.id === id);
+  // A panel id can have more than one build on file (see the "repeat panel
+  // builds" note in mockData.js) — this resolves each history row's buildId
+  // back to a job number so entries against the same panel don't look
+  // identical when they were actually different jobs.
+  const jobNumberByBuildId = useMemo(() => new Map(panels.map((p) => [p.buildId, p.jobNumber])), [panels]);
 
   // Real output stats computed from this technician's actual logged
   // sessions — stages they haven't worked simply don't appear.
@@ -134,7 +139,12 @@ export default function EmployeeDetail() {
               {recentActivity.map((h, i) => (
                 <tr key={h.id} className={`border-b border-paper-100 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
                   <td className="px-4 py-2.5 text-ink-900 font-medium">{h.date}</td>
-                  <td className="px-4 py-2.5 text-ink-600">{h.panel}</td>
+                  <td className="px-4 py-2.5 text-ink-600">
+                    {h.panel}
+                    {jobNumberByBuildId.get(h.buildId) && (
+                      <span className="text-ink-400"> · Job #{jobNumberByBuildId.get(h.buildId)}</span>
+                    )}
+                  </td>
                   <td className="px-4 py-2.5 text-ink-600">{h.stage ?? "—"}</td>
                   <td className="px-4 py-2.5 text-ink-700 font-medium">
                     +{h.percentAdded}% {h.taskCompleted && <span className="text-good-600">(completed)</span>}

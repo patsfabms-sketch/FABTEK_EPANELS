@@ -5,7 +5,7 @@ import { Button, formatNumber } from "../../components/ui";
 
 export default function ActiveSession() {
   const { session, setSessionNotes, stopSession, panels } = useApp();
-  const activePanel = panels.find((p) => `#${p.id}` === session.panel);
+  const activePanel = panels.find((p) => `#${p.id}` === session.panel && p.buildId === session.buildId);
   const navigate = useNavigate();
   const [elapsed, setElapsed] = useState(0);
   const [showStopModal, setShowStopModal] = useState(false);

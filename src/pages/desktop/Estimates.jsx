@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useApp } from "../../context/AppContext";
 import { connectionsForPanel } from "../../data/mockData";
 import { parseEstimateCsv, parseEstimatePdf } from "../../data/estimateImport";
-import { Card, SectionTitle, Button, formatNumber } from "../../components/ui";
+import { Card, SectionTitle, Button, formatNumber, formatDate } from "../../components/ui";
 
 function readFileAsText(file) {
   return new Promise((resolve, reject) => {
@@ -26,6 +26,45 @@ function readFileAsDataUrl(file) {
 // it can be opened again later from the panel detail view — "the original
 // document of the PDF estimate should also be available to view". CSV
 // imports have no source document to attach.
+// Most QuickBooks estimates simply don't carry a PO number — there's nothing
+// for the importer to extract — so this cell lets a manager type one in
+// right where the import just landed, without a separate trip to the panel
+// detail view.
+function PoCell({ panel }) {
+  const { updatePanel } = useApp();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(panel.poNumber || "");
+
+  useEffect(() => setValue(panel.poNumber || ""), [panel.poNumber]);
+
+  function save() {
+    updatePanel(panel.buildId, { poNumber: value.trim() });
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => e.key === "Enter" && save()}
+        className="w-28 rounded-md border border-brand-300 px-1.5 py-1 text-[12px]"
+      />
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setEditing(true)}
+      className={panel.poNumber ? "hover:text-brand-600" : "text-ink-400 italic hover:text-brand-600"}
+    >
+      {panel.poNumber || "add PO…"}
+    </button>
+  );
+}
+
 async function parseEstimateFile(file) {
   if (file.name.toLowerCase().endsWith(".pdf") || file.type === "application/pdf") {
     const [{ rows, errors }, pdfDataUrl] = await Promise.all([parseEstimatePdf(file), readFileAsDataUrl(file)]);
@@ -164,6 +203,7 @@ function PanelEstimatesCard() {
               <th className="py-1.5 pr-3 font-semibold">Panel</th>
               <th className="py-1.5 pr-3 font-semibold">Job #</th>
               <th className="py-1.5 pr-3 font-semibold">Customer</th>
+              <th className="py-1.5 pr-3 font-semibold">Date Added</th>
               <th className="py-1.5 pr-3 font-semibold">PO #</th>
               <th className="py-1.5 pr-3 font-semibold">Estimate</th>
               <th className="py-1.5 pr-3 font-semibold text-right">Connections</th>
@@ -171,11 +211,14 @@ function PanelEstimatesCard() {
           </thead>
           <tbody>
             {panels.map((p) => (
-              <tr key={p.id} className="border-b border-paper-50">
+              <tr key={p.buildId} className="border-b border-paper-50">
                 <td className="py-1.5 pr-3 font-medium text-ink-900">#{p.id}</td>
                 <td className="py-1.5 pr-3 text-ink-600">{p.jobNumber || "—"}</td>
                 <td className="py-1.5 pr-3 text-ink-600">{p.customer}</td>
-                <td className="py-1.5 pr-3 text-ink-600">{p.poNumber || "—"}</td>
+                <td className="py-1.5 pr-3 text-ink-600">{formatDate(p.dateAdded)}</td>
+                <td className="py-1.5 pr-3 text-ink-600">
+                  <PoCell panel={p} />
+                </td>
                 <td className="py-1.5 pr-3 text-ink-600">${formatNumber(p.price)}</td>
                 <td className="py-1.5 pr-3 text-right font-semibold text-ink-900">
                   {formatNumber(connectionsForPanel(p, pricePerConnection))}

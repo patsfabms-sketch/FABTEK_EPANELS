@@ -53,6 +53,7 @@ export function AppProvider({ children }) {
       panel: null,
       stage: null,
       targetConnections: null,
+      buildId: null,
       startingProgress: 0,
       startedAt: null,
       notes: "",
@@ -294,40 +295,84 @@ export function AppProvider({ children }) {
     if (Number.isFinite(num) && num > 0) setPricePerConnectionState(num);
   }
 
+  // A panel id can come back around — the same panel model built again for
+  // a new order. When that happens this appends a brand-new build (its own
+  // buildId, its own task progress, its own hours) rather than overwriting
+  // the last one, so the manager keeps a full history of every time a given
+  // panel has been built and can compare how long each one took (see
+  // mockData.currentBuilds/siblingBuilds/computeBuildStats and the "Build
+  // History" section on the panel detail view). A row only updates the
+  // existing entry in place when it looks like the *same* job — its job
+  // number matches the current build's (or either side is blank, e.g. a
+  // CSV import without job numbers) — treating it as a revised estimate for
+  // work that hasn't necessarily started yet, not a new build.
   function importEstimates(rows) {
     if (!rows.length) return;
     const today = new Date().toISOString().slice(0, 10);
+    let newBuilds = 0;
     setPanels((prev) => {
-      const byId = new Map(prev.map((p) => [p.id, p]));
+      const next = [...prev];
       rows.forEach((r) => {
-        const existing = byId.get(r.id);
-        byId.set(r.id, {
-          id: r.id,
-          customer: r.customer || existing?.customer || "Unknown Customer",
-          order: r.order || existing?.order || "",
-          price: r.price,
-          jobNumber: r.jobNumber || existing?.jobNumber || "",
-          poNumber: r.poNumber || existing?.poNumber || "",
-          // Set once, the first time a panel is imported — re-importing the
-          // same job (e.g. a revised estimate) doesn't reset it.
-          dateAdded: existing?.dateAdded || today,
-          pdfDataUrl: r.pdfDataUrl || existing?.pdfDataUrl || null,
-          pdfFileName: r.pdfFileName || existing?.pdfFileName || null,
-        });
+        const currentIdx = next.map((p) => p.id).lastIndexOf(r.id);
+        const current = currentIdx !== -1 ? next[currentIdx] : null;
+        const sameJob = current && (!r.jobNumber || !current.jobNumber || r.jobNumber === current.jobNumber);
+
+        if (current && sameJob) {
+          next[currentIdx] = {
+            ...current,
+            customer: r.customer || current.customer || "Unknown Customer",
+            order: r.order || current.order || "",
+            price: r.price,
+            jobNumber: r.jobNumber || current.jobNumber || "",
+            poNumber: r.poNumber || current.poNumber || "",
+            pdfDataUrl: r.pdfDataUrl || current.pdfDataUrl || null,
+            pdfFileName: r.pdfFileName || current.pdfFileName || null,
+          };
+        } else {
+          newBuilds += 1;
+          next.push({
+            id: r.id,
+            buildId: `b${Date.now()}-${Math.round(Math.random() * 1e6)}`,
+            customer: r.customer || "Unknown Customer",
+            order: r.order || "",
+            price: r.price,
+            jobNumber: r.jobNumber || "",
+            poNumber: r.poNumber || "",
+            dateAdded: today,
+            pdfDataUrl: r.pdfDataUrl || null,
+            pdfFileName: r.pdfFileName || null,
+          });
+        }
       });
-      return Array.from(byId.values());
+      return next;
     });
+    const updated = rows.length - newBuilds;
     setActivityFeed((prev) => [
       {
         id: `a${Date.now()}`,
         who: currentAdmin?.name ?? "Manager",
-        action: `imported ${rows.length} panel estimate${rows.length === 1 ? "" : "s"}`,
+        action:
+          newBuilds && updated
+            ? `imported ${newBuilds} new panel build${newBuilds === 1 ? "" : "s"} and updated ${updated} existing`
+            : newBuilds
+              ? `imported ${newBuilds} panel build${newBuilds === 1 ? "" : "s"}`
+              : `updated ${updated} panel estimate${updated === 1 ? "" : "s"}`,
         ref: "QuickBooks Estimate",
         time: "just now",
         kind: "scan",
       },
       ...prev,
     ]);
+  }
+
+  // Manual correction/addition for one build's fields — most commonly the PO
+  // number, which QuickBooks estimates often don't carry at all (there's
+  // nothing to auto-extract), so a manager fills it in themselves after the
+  // PDF is imported. Also covers fixing a job number or description the PDF
+  // parser mis-read. Keyed by buildId, not panel id — a panel id can now
+  // have more than one build on file.
+  function updatePanel(buildId, fields) {
+    setPanels((prev) => prev.map((p) => (p.buildId === buildId ? { ...p, ...fields } : p)));
   }
 
   const employeesWithAttainment = useMemo(
@@ -366,12 +411,21 @@ export function AppProvider({ children }) {
   // who has worked the task, so credit for a task finished across multiple
   // people/days splits by what each person actually reported — nobody who
   // only did part of the job gets credit for the whole thing.
-  function startSession(panel, stage, targetConnections = null) {
-    const startingProgress = taskProgress(workHistory, panel, stage);
-    setSession({ active: true, panel, stage, targetConnections, startingProgress, startedAt: Date.now(), notes: "" });
+  function startSession(panel, stage, targetConnections = null, buildId = null) {
+    const startingProgress = taskProgress(workHistory, panel, stage, buildId);
+    setSession({
+      active: true,
+      panel,
+      stage,
+      targetConnections,
+      buildId,
+      startingProgress,
+      startedAt: Date.now(),
+      notes: "",
+    });
     setActiveSessions((prev) => [
       ...prev.filter((s) => s.employeeId !== currentUserId),
-      { id: `live-${currentUserId}`, employeeId: currentUserId, panel, stage, startedAt: Date.now() },
+      { id: `live-${currentUserId}`, employeeId: currentUserId, panel, stage, buildId, startedAt: Date.now() },
     ]);
     setActivityFeed((prev) => [
       { id: `a${Date.now()}`, who: "You", action: `started ${stage.toLowerCase()} session`, ref: `Panel ${panel}`, time: "just now", kind: "scan" },
@@ -407,6 +461,7 @@ export function AppProvider({ children }) {
         date: new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
         panel: session.panel,
         stage: session.stage,
+        buildId: session.buildId,
         percentAdded: pct,
         taskCompleted: isComplete,
         connectionsCredited,
@@ -437,6 +492,7 @@ export function AppProvider({ children }) {
       panel: null,
       stage: null,
       targetConnections: null,
+      buildId: null,
       startingProgress: 0,
       startedAt: null,
       notes: "",
@@ -473,6 +529,7 @@ export function AppProvider({ children }) {
     addAdmin,
     setPricePerConnection,
     importEstimates,
+    updatePanel,
     startSession,
     setSessionNotes,
     stopSession,

@@ -181,12 +181,16 @@ function extractDocumentFields(lines) {
 }
 
 // A line item row, once joined, reads like:
-//   "1. Misc Sales No Tax 109967 FIRST ENERGY 1 $944.00 $944.00"
+//   "1. Misc Sales No Tax 1100012 ENTERGY MISSISSIPPI 2 $732.00 $1,464.00"
 // The product/service name varies by QuickBooks setup, so instead of
 // matching it literally, this pulls out (in order): the leading item
 // number, the trailing qty + two dollar amounts, and — from what's left —
-// the first standalone number (the panel/job ID) and everything after it
-// (the customer/project name).
+// the first standalone number onward, which is the Description cell as
+// QuickBooks renders it here ("1100012 ENTERGY MISSISSIPPI" — an internal
+// panel/job tag followed by the end customer, packed into one cell). That
+// whole cell is kept verbatim as the panel's description; the leading
+// number doubles as this app's internal panel id, and everything after it
+// as the customer name.
 function parseLineItemRow(line) {
   const itemMatch = line.match(/^(\d+)\.\s+(.*)$/);
   if (!itemMatch) return null;
@@ -208,6 +212,7 @@ function parseLineItemRow(line) {
   return {
     id: words[numIdx],
     customer: words.slice(numIdx + 1).join(" ").trim(),
+    description: words.slice(numIdx).join(" "),
     price: amount,
   };
 }
@@ -228,7 +233,7 @@ function parseEstimateLines(lines) {
     rows.push({
       id: parsed.id,
       customer: parsed.customer || billTo || "Unknown Customer",
-      order: billTo,
+      order: parsed.description || billTo,
       price: parsed.price,
       jobNumber,
       poNumber,

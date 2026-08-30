@@ -4,8 +4,13 @@ import { useApp } from "../../context/AppContext";
 const FILTERS = ["This Week", "Last Week", "This Month", "All"];
 
 export default function History() {
-  const { myWorkHistory: workHistory } = useApp();
+  const { myWorkHistory: workHistory, panels } = useApp();
   const [filter, setFilter] = useState("This Week");
+
+  // A panel id can have more than one build on file — resolve each row's
+  // buildId back to a job number so repeat work on the same panel is
+  // distinguishable between jobs.
+  const jobNumberByBuildId = useMemo(() => new Map(panels.map((p) => [p.buildId, p.jobNumber])), [panels]);
 
   const rows = useMemo(() => {
     if (filter === "This Week") return workHistory.slice(0, 4);
@@ -76,7 +81,9 @@ export default function History() {
               </span>
             </div>
             <p className="text-[11px] text-ink-500 mt-1">
-              Panel {h.panel} {h.stage ? `· ${h.stage}` : ""}
+              Panel {h.panel}
+              {jobNumberByBuildId.get(h.buildId) ? ` · Job #${jobNumberByBuildId.get(h.buildId)}` : ""}
+              {h.stage ? ` · ${h.stage}` : ""}
             </p>
             <div className="flex items-center gap-4 mt-2 text-[11px] text-ink-600">
               <span>

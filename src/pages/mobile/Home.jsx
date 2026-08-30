@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
-import { productionStages, connectionsForPanel, taskProgress } from "../../data/mockData";
+import { productionStages, connectionsForPanel, taskProgress, currentBuilds } from "../../data/mockData";
 import { Button, formatNumber } from "../../components/ui";
 
 export default function Home() {
@@ -26,7 +26,14 @@ export default function Home() {
     .reduce((s, h) => s + h.hours, 0);
 
   const stageProgress =
-    scannedPanel && selectedStage ? taskProgress(allWorkHistory, `#${scannedPanel.id}`, selectedStage) : 0;
+    scannedPanel && selectedStage
+      ? taskProgress(allWorkHistory, `#${scannedPanel.id}`, selectedStage, scannedPanel.buildId)
+      : 0;
+
+  // Only the current (most recent) build of each panel is scannable — an
+  // older repeat build of the same panel is closed-out history, not
+  // something a technician should be logging new work against.
+  const scannablePanels = currentBuilds(panels);
 
   function closeScanner() {
     setShowScanner(false);
@@ -40,7 +47,7 @@ export default function Home() {
 
   function handleStart() {
     const target = connectionsForPanel(scannedPanel, pricePerConnection);
-    startSession(`#${scannedPanel.id}`, selectedStage, target);
+    startSession(`#${scannedPanel.id}`, selectedStage, target, scannedPanel.buildId);
     closeScanner();
     navigate("/mobile/session");
   }
@@ -115,15 +122,15 @@ export default function Home() {
               <>
                 <p className="text-sm font-semibold text-ink-900 mb-1">Scanning Panel…</p>
                 <p className="text-[11px] text-ink-500 mb-4">Point camera at the QR code on the panel. (Simulated — pick one below.)</p>
-                {panels.length === 0 && (
+                {scannablePanels.length === 0 && (
                   <p className="text-xs text-ink-400 text-center py-6">
                     No panels yet — ask your manager to import a panel estimate first.
                   </p>
                 )}
                 <div className="space-y-2">
-                  {panels.map((p) => (
+                  {scannablePanels.map((p) => (
                     <button
-                      key={p.id}
+                      key={p.buildId}
                       onClick={() => handleScan(p)}
                       className="w-full flex items-center justify-between rounded-lg border border-paper-200 px-3 py-2.5 text-left hover:border-brand-400"
                     >

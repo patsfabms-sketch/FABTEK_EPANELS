@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import QRCode from "qrcode";
-import { panelQrValue } from "../data/mockData";
+import { useApp } from "../context/AppContext";
+import { panelQrValue, siblingBuilds, computeBuildStats } from "../data/mockData";
 import { Modal, Button, RoleBadge, formatNumber, formatDate } from "./ui";
 
 const SIZE_PRESETS = [
@@ -28,9 +29,11 @@ function formatElapsed(startedAt, now) {
   return `${Math.floor(mins / 60)}h ${mins % 60}m`;
 }
 
-export default function PanelDetailModal({ group, onClose }) {
+export default function PanelDetailModal({ group, onClose, onSelectBuild }) {
   const navigate = useNavigate();
+  const { panels, workHistory } = useApp();
   const [showPrint, setShowPrint] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -40,6 +43,14 @@ export default function PanelDetailModal({ group, onClose }) {
 
   if (!group) return null;
   const { panel, target, active, completed } = group;
+
+  // Every other build (past or, in principle, future) of this same panel
+  // id — how a manager compares "did this job take longer or shorter than
+  // last time." Newest first so the build being viewed is easy to spot.
+  const builds = siblingBuilds(panels, panel.id)
+    .map((b) => ({ build: b, stats: computeBuildStats(workHistory, b) }))
+    .sort((a, b) => (b.build.dateAdded || "").localeCompare(a.build.dateAdded || ""));
+  const thisBuildStats = computeBuildStats(workHistory, panel);
 
   return (
     <Modal onClose={onClose} widthClass="max-w-2xl">
@@ -67,15 +78,69 @@ export default function PanelDetailModal({ group, onClose }) {
         <StatBlock label="Connection Target" value={formatNumber(target)} />
         <StatBlock label="Estimate" value={`$${formatNumber(panel.price)}`} />
         <StatBlock label="Active Now" value={active.length} />
-        <StatBlock label="Logged Entries" value={completed.length} />
+        <StatBlock label="Total Hours (this build)" value={thisBuildStats.hours} />
       </div>
 
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-[11px] font-semibold text-ink-500 uppercase tracking-wide">Details</p>
+        <button onClick={() => setShowEdit(true)} className="text-[11px] font-semibold text-brand-600 hover:text-brand-700">
+          Edit
+        </button>
+      </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5 text-[12px]">
         <DetailField label="Date Added" value={formatDate(panel.dateAdded)} />
         <DetailField label="Job Number" value={panel.jobNumber || "—"} />
-        <DetailField label="PO Number" value={panel.poNumber || "—"} />
+        <DetailField
+          label="PO Number"
+          value={panel.poNumber || "Not on file — click Edit to add"}
+          muted={!panel.poNumber}
+        />
         <DetailField label="Description" value={panel.order || "—"} />
       </div>
+
+      {builds.length > 1 && (
+        <>
+          <p className="text-[11px] font-semibold text-ink-500 uppercase tracking-wide mb-2">
+            Build History — Panel #{panel.id} ({builds.length} builds)
+          </p>
+          <div className="rounded-lg border border-paper-200 overflow-x-auto mb-5">
+            <table className="w-full text-[12px]">
+              <thead>
+                <tr className="text-left text-ink-500 border-b border-paper-100 bg-paper-50">
+                  <th className="px-3 py-2 font-semibold">Job #</th>
+                  <th className="px-3 py-2 font-semibold">Date</th>
+                  <th className="px-3 py-2 font-semibold text-right">Hours</th>
+                  <th className="px-3 py-2 font-semibold text-right">Connections</th>
+                  <th className="px-3 py-2 font-semibold text-right">Sessions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {builds.map(({ build, stats }) => {
+                  const isCurrent = build.buildId === panel.buildId;
+                  return (
+                    <tr
+                      key={build.buildId}
+                      onClick={() => onSelectBuild?.(build)}
+                      className={`border-b border-paper-50 last:border-0 ${
+                        onSelectBuild ? "cursor-pointer hover:bg-brand-50/60" : ""
+                      } ${isCurrent ? "bg-brand-50/40 font-semibold text-ink-900" : "text-ink-700"}`}
+                    >
+                      <td className="px-3 py-2">
+                        #{build.jobNumber || build.id}
+                        {isCurrent && <span className="text-brand-600 font-semibold"> · viewing</span>}
+                      </td>
+                      <td className="px-3 py-2">{formatDate(build.dateAdded)}</td>
+                      <td className="px-3 py-2 text-right">{stats.hours}</td>
+                      <td className="px-3 py-2 text-right">{stats.connections || "—"}</td>
+                      <td className="px-3 py-2 text-right">{stats.sessions}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
 
       <p className="text-[11px] font-semibold text-ink-500 uppercase tracking-wide mb-2">
         Currently scanned in ({active.length})
@@ -150,6 +215,63 @@ export default function PanelDetailModal({ group, onClose }) {
       </div>
 
       {showPrint && <PrintQrModal panel={panel} onClose={() => setShowPrint(false)} />}
+      {showEdit && <EditPanelModal panel={panel} onClose={() => setShowEdit(false)} />}
+    </Modal>
+  );
+}
+
+// QuickBooks estimates often don't carry a PO number at all — there's
+// nothing for the importer to auto-extract — so this is how a manager adds
+// one after the fact. Also covers correcting a job number or description
+// the PDF parser mis-read.
+function EditPanelModal({ panel, onClose }) {
+  const { updatePanel } = useApp();
+  const [jobNumber, setJobNumber] = useState(panel.jobNumber || "");
+  const [poNumber, setPoNumber] = useState(panel.poNumber || "");
+  const [description, setDescription] = useState(panel.order || "");
+
+  function handleSave() {
+    updatePanel(panel.buildId, {
+      jobNumber: jobNumber.trim(),
+      poNumber: poNumber.trim(),
+      order: description.trim(),
+    });
+    onClose();
+  }
+
+  return (
+    <Modal onClose={onClose} widthClass="max-w-sm">
+      <h3 className="text-base font-bold text-ink-900 mb-4">Edit Panel Details — #{panel.id}</h3>
+
+      <label className="text-xs font-semibold text-ink-500">Job Number</label>
+      <input
+        value={jobNumber}
+        onChange={(e) => setJobNumber(e.target.value)}
+        placeholder="e.g. 8016"
+        className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
+      />
+
+      <label className="text-xs font-semibold text-ink-500">PO Number</label>
+      <input
+        value={poNumber}
+        onChange={(e) => setPoNumber(e.target.value)}
+        placeholder="Not on the estimate — enter it here"
+        className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
+      />
+
+      <label className="text-xs font-semibold text-ink-500">Description</label>
+      <input
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        className="mt-1 mb-5 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
+      />
+
+      <div className="flex justify-end gap-2">
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button onClick={handleSave}>Save</Button>
+      </div>
     </Modal>
   );
 }
@@ -179,11 +301,11 @@ function StatBlock({ label, value }) {
   );
 }
 
-function DetailField({ label, value }) {
+function DetailField({ label, value, muted = false }) {
   return (
     <div>
       <p className="text-[10px] font-semibold text-ink-500 uppercase tracking-wide">{label}</p>
-      <p className="text-ink-900 font-medium mt-0.5 truncate" title={value}>
+      <p className={`mt-0.5 truncate ${muted ? "text-ink-400 italic" : "text-ink-900 font-medium"}`} title={value}>
         {value}
       </p>
     </div>

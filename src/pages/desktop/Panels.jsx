@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useApp } from "../../context/AppContext";
-import { connectionsForPanel, taskProgress } from "../../data/mockData";
+import { connectionsForPanel, taskProgress, currentBuilds } from "../../data/mockData";
 import { SectionTitle, formatNumber, formatDate } from "../../components/ui";
 import PanelDetailModal from "../../components/PanelDetailModal";
 
@@ -10,27 +10,33 @@ export default function Panels() {
 
   const employeeById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
 
-  const panelGroups = useMemo(() => {
-    return panels.map((p) => {
-      const tag = `#${p.id}`;
-      const active = activeSessions
-        .filter((s) => s.panel === tag)
-        .map((s) => ({
-          ...s,
-          employee: employeeById.get(s.employeeId),
-          stageProgress: taskProgress(workHistory, tag, s.stage),
-        }));
-      const completed = workHistory
-        .filter((h) => h.panel === tag)
-        .map((h) => ({ ...h, employee: employeeById.get(h.employeeId) }));
-      return {
-        panel: p,
-        target: connectionsForPanel(p, pricePerConnection),
-        active,
-        completed,
-      };
-    });
-  }, [panels, activeSessions, workHistory, employeeById, pricePerConnection]);
+  // Builds a detail group for any one build of a panel — not just the
+  // current ones this page lists, so a click from the Build History table
+  // inside the detail modal (an older, non-current build) can still open
+  // its own full detail view.
+  function makeGroup(p) {
+    const tag = `#${p.id}`;
+    const active = activeSessions
+      .filter((s) => s.panel === tag && s.buildId === p.buildId)
+      .map((s) => ({
+        ...s,
+        employee: employeeById.get(s.employeeId),
+        stageProgress: taskProgress(workHistory, tag, s.stage, p.buildId),
+      }));
+    const completed = workHistory
+      .filter((h) => h.panel === tag && h.buildId === p.buildId)
+      .map((h) => ({ ...h, employee: employeeById.get(h.employeeId) }));
+    return { panel: p, target: connectionsForPanel(p, pricePerConnection), active, completed };
+  }
+
+  // Only the current (most recent) build of each panel id is actionable —
+  // older repeat builds of the same panel are read-only history, reachable
+  // from a build's own detail view rather than cluttering this list.
+  const panelGroups = useMemo(
+    () => currentBuilds(panels).map(makeGroup),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [panels, activeSessions, workHistory, employeeById, pricePerConnection]
+  );
 
   const inProgress = panelGroups.filter((g) => g.active.length > 0);
   const idle = panelGroups.filter((g) => g.active.length === 0);
@@ -67,7 +73,13 @@ export default function Panels() {
         />
       </div>
 
-      {selectedGroup && <PanelDetailModal group={selectedGroup} onClose={() => setSelectedGroup(null)} />}
+      {selectedGroup && (
+        <PanelDetailModal
+          group={selectedGroup}
+          onClose={() => setSelectedGroup(null)}
+          onSelectBuild={(build) => setSelectedGroup(makeGroup(build))}
+        />
+      )}
     </div>
   );
 }
@@ -97,7 +109,7 @@ function PanelTable({ groups, emptyText, onSelect }) {
         <tbody>
           {groups.map(({ panel, target, active, completed }) => (
             <tr
-              key={panel.id}
+              key={panel.buildId}
               onClick={() => onSelect({ panel, target, active, completed })}
               className="border-b border-paper-100 last:border-0 cursor-pointer hover:bg-brand-50/60 transition-colors"
             >

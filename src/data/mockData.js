@@ -102,11 +102,65 @@ export function generateDailyOutput(days = 30, target = 120) {
 // Sums how much of a (panel, stage) task has been completed across every
 // technician who has logged work on it — see AppContext.startSession /
 // stopSession for how a session's contribution gets attributed and capped.
-export function taskProgress(workHistory, panelTag, stage) {
+//
+// buildId scopes this to one specific build of the panel (see the "repeat
+// panel builds" comment block below) — pass it whenever it's known. Without
+// it, progress would wrongly carry over from a previous build of the same
+// panel id (e.g. a brand-new repeat order would look "already 100% done"
+// because the last time this panel was built, it was finished).
+export function taskProgress(workHistory, panelTag, stage, buildId) {
   const total = workHistory
-    .filter((h) => h.panel === panelTag && h.stage === stage)
+    .filter(
+      (h) => h.panel === panelTag && h.stage === stage && (buildId === undefined || h.buildId === buildId)
+    )
     .reduce((sum, h) => sum + (h.percentAdded ?? 0), 0);
   return Math.max(0, Math.min(100, total));
+}
+
+// ---------------------------------------------------------------------------
+// Repeat panel builds
+//
+// A panel "id" identifies a reusable panel model/part number (the tag
+// embedded in the QuickBooks estimate's Description cell), not a single job
+// — the same design can get built again for a new order down the road, each
+// time under its own job number and PO. AppContext.importEstimates appends a
+// new entry (its own buildId) to `panels` whenever it sees a *new* job
+// number for an id it's already seen, rather than overwriting the old one —
+// so `panels` naturally accumulates every build a given panel id has ever
+// had. `id` repeats across those entries; `buildId` is what's actually
+// unique per entry, and what workHistory/activeSessions rows are stamped
+// with so each build's own hours/progress stay separate from any other
+// build of the same panel.
+// ---------------------------------------------------------------------------
+
+// The build a technician should be scanning into right now for a given
+// panel id — always the most recently imported one (later entries in the
+// array win). Older entries sharing the same id are read-only history.
+export function currentBuilds(panels) {
+  const latestById = new Map();
+  panels.forEach((p) => latestById.set(p.id, p));
+  return Array.from(latestById.values());
+}
+
+// Every build (past and current) that shares a panel id, in the order they
+// were imported — the comparison list for "how has this job's time trended."
+export function siblingBuilds(panels, id) {
+  return panels.filter((p) => p.id === id);
+}
+
+// Hours/connections/sessions actually logged against one specific build —
+// not the panel id's whole lifetime.
+export function computeBuildStats(workHistory, panel) {
+  const tag = `#${panel.id}`;
+  const rows = workHistory.filter((h) => h.panel === tag && h.buildId === panel.buildId);
+  const totalHours = rows.reduce((s, h) => s + (h.hours || 0), 0);
+  const totalConnections = rows.reduce((s, h) => s + (h.connectionsCredited || 0), 0);
+  return {
+    sessions: rows.length,
+    hours: Number(totalHours.toFixed(1)),
+    connections: totalConnections,
+    completedTasks: rows.filter((h) => h.taskCompleted).length,
+  };
 }
 
 // Everything below starts empty — this app ships with no fake people, panels,
