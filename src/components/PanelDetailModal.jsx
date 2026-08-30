@@ -483,16 +483,63 @@ const PDF_BUTTON_BASE_CLASS =
 
 // The estimate PDF a panel was imported from lives in IndexedDB (see
 // data/pdfStore.js), keyed by panel.pdfId — panels only carry that short id,
-// not the file itself, so this fetches the actual Blob on click rather than
-// keeping every panel's PDF loaded in memory or in a plain href up front.
+// not the file itself. This loads the actual Blob as soon as the detail
+// view opens (not on click) and turns it into a real <a href> link, so
+// clicking it is an ordinary same-tab-click browser navigation.
+//
+// The previous version opened a blank tab on click (window.open("", "_blank"))
+// and filled in its location once the blob finished loading a moment later.
+// That gap between opening the tab and navigating it is exactly the pattern
+// some browsers' popup/redirect heuristics silently block — the tab opens,
+// nothing ever loads into it, and no error surfaces anywhere for the app to
+// catch. Pre-loading the blob means the link's href is already resolved
+// before the user ever clicks, so there's no delayed navigation for a
+// blocker to catch in the first place.
+//
 // `panel.pdfDataUrl` is also still honored, for any panel saved back when
 // PDFs were embedded as data URLs directly (before this fix), so an older
 // panel's link keeps working without needing to be re-imported.
 function ViewPdfButton({ panel }) {
-  const [status, setStatus] = useState("idle"); // idle | loading | error
-  const hasPdf = Boolean(panel.pdfDataUrl || panel.pdfId);
+  const [objectUrl, setObjectUrl] = useState(null);
+  const [status, setStatus] = useState("loading"); // loading | ready | error | none
 
-  if (!hasPdf) {
+  useEffect(() => {
+    let cancelled = false;
+    let createdUrl = null;
+    setObjectUrl(null);
+
+    if (panel.pdfDataUrl) {
+      setStatus("ready");
+      return undefined;
+    }
+    if (!panel.pdfId) {
+      setStatus("none");
+      return undefined;
+    }
+
+    setStatus("loading");
+    getPdfBlob(panel.pdfId)
+      .then((blob) => {
+        if (cancelled) return;
+        if (!blob) {
+          setStatus("error");
+          return;
+        }
+        createdUrl = URL.createObjectURL(blob);
+        setObjectUrl(createdUrl);
+        setStatus("ready");
+      })
+      .catch(() => {
+        if (!cancelled) setStatus("error");
+      });
+
+    return () => {
+      cancelled = true;
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
+    };
+  }, [panel.pdfId, panel.pdfDataUrl]);
+
+  if (status === "none") {
     return (
       <span
         title="No source PDF on file for this panel (imported from a CSV, or before PDF import was supported)"
@@ -503,51 +550,34 @@ function ViewPdfButton({ panel }) {
     );
   }
 
-  async function handleClick() {
-    if (panel.pdfDataUrl) {
-      window.open(panel.pdfDataUrl, "_blank", "noopener");
-      return;
-    }
-    // Open the tab synchronously, in the same click, so it isn't blocked as
-    // a popup — its destination gets filled in once the blob is ready.
-    // Deliberately omits "noopener" here: that flag makes window.open()
-    // return null (no handle back to the new tab), which is exactly the
-    // handle this needs to fill in the URL once the blob is ready — sever
-    // the opener link manually instead, right after opening, which keeps
-    // the same isolation without losing the reference.
-    const win = window.open("", "_blank");
-    if (win) win.opener = null;
-    setStatus("loading");
-    try {
-      const blob = await getPdfBlob(panel.pdfId);
-      if (!blob || !win) {
-        win?.close();
-        setStatus("error");
-        return;
-      }
-      const url = URL.createObjectURL(blob);
-      win.location.href = url;
-      setStatus("idle");
-    } catch {
-      win?.close();
-      setStatus("error");
-    }
+  if (status === "loading") {
+    return (
+      <span className={`${PDF_BUTTON_BASE_CLASS} bg-transparent text-ink-400 border border-paper-200`}>
+        <DocIcon /> Loading PDF…
+      </span>
+    );
+  }
+
+  if (status === "error") {
+    return (
+      <span
+        title="Couldn't find the saved PDF for this panel — try re-importing this estimate on the Estimates page"
+        className={`${PDF_BUTTON_BASE_CLASS} bg-transparent text-bad-600 border border-bad-200`}
+      >
+        <DocIcon /> Couldn't find saved PDF
+      </span>
+    );
   }
 
   return (
-    <button
-      onClick={handleClick}
-      disabled={status === "loading"}
-      title={status === "error" ? "Couldn't find the saved PDF — try re-importing this estimate" : undefined}
-      className={`${PDF_BUTTON_BASE_CLASS} bg-transparent border ${
-        status === "error"
-          ? "text-bad-600 border-bad-200 hover:bg-bad-50"
-          : "text-ink-700 border-paper-200 hover:bg-paper-100"
-      }`}
+    <a
+      href={panel.pdfDataUrl || objectUrl}
+      target="_blank"
+      rel="noreferrer"
+      className={`${PDF_BUTTON_BASE_CLASS} bg-transparent text-ink-700 border border-paper-200 hover:bg-paper-100`}
     >
-      <DocIcon />
-      {status === "loading" ? "Opening…" : status === "error" ? "Couldn't open — try again" : "View Estimate PDF"}
-    </button>
+      <DocIcon /> View Estimate PDF
+    </a>
   );
 }
 
