@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import QRCode from "qrcode";
 import { useApp } from "../context/AppContext";
-import { panelQrValue, siblingBuilds, computeBuildStats } from "../data/mockData";
+import { panelQrValue, siblingBuilds, computeBuildStats, connectionsForPanel, taskProgress } from "../data/mockData";
 import { Modal, Button, RoleBadge, formatNumber, formatDate } from "./ui";
 
 const SIZE_PRESETS = [
@@ -29,9 +29,13 @@ function formatElapsed(startedAt, now) {
   return `${Math.floor(mins / 60)}h ${mins % 60}m`;
 }
 
-export default function PanelDetailModal({ group, onClose, onSelectBuild }) {
+// Takes a buildId (not a snapshotted group object) and computes everything
+// it shows live from context on every render — so an edit made via
+// EditPanelModal (which mutates the shared `panels` array) is reflected
+// immediately instead of only after the modal is closed and reopened.
+export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
   const navigate = useNavigate();
-  const { panels, workHistory } = useApp();
+  const { panels, workHistory, activeSessions, employees, pricePerConnection } = useApp();
   const [showPrint, setShowPrint] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -41,8 +45,25 @@ export default function PanelDetailModal({ group, onClose, onSelectBuild }) {
     return () => clearInterval(id);
   }, []);
 
-  if (!group) return null;
-  const { panel, target, active, completed } = group;
+  const panel = panels.find((p) => p.buildId === buildId);
+
+  // Guard first — a panel can disappear out from under an open modal (it was
+  // just deleted), and everything below assumes `panel` exists.
+  if (!panel) return null;
+
+  const employeeById = new Map(employees.map((e) => [e.id, e]));
+  const tag = `#${panel.id}`;
+  const target = connectionsForPanel(panel, pricePerConnection);
+  const active = activeSessions
+    .filter((s) => s.panel === tag && s.buildId === panel.buildId)
+    .map((s) => ({
+      ...s,
+      employee: employeeById.get(s.employeeId),
+      stageProgress: taskProgress(workHistory, tag, s.stage, panel.buildId),
+    }));
+  const completed = workHistory
+    .filter((h) => h.panel === tag && h.buildId === panel.buildId)
+    .map((h) => ({ ...h, employee: employeeById.get(h.employeeId) }));
 
   // Every other build (past or, in principle, future) of this same panel
   // id — how a manager compares "did this job take longer or shorter than
@@ -120,7 +141,7 @@ export default function PanelDetailModal({ group, onClose, onSelectBuild }) {
                   return (
                     <tr
                       key={build.buildId}
-                      onClick={() => onSelectBuild?.(build)}
+                      onClick={() => onSelectBuild?.(build.buildId)}
                       className={`border-b border-paper-50 last:border-0 ${
                         onSelectBuild ? "cursor-pointer hover:bg-brand-50/60" : ""
                       } ${isCurrent ? "bg-brand-50/40 font-semibold text-ink-900" : "text-ink-700"}`}
@@ -215,33 +236,93 @@ export default function PanelDetailModal({ group, onClose, onSelectBuild }) {
       </div>
 
       {showPrint && <PrintQrModal panel={panel} onClose={() => setShowPrint(false)} />}
-      {showEdit && <EditPanelModal panel={panel} onClose={() => setShowEdit(false)} />}
+      {showEdit && (
+        <EditPanelModal
+          panel={panel}
+          onClose={() => setShowEdit(false)}
+          onDeleted={() => {
+            setShowEdit(false);
+            onClose();
+          }}
+        />
+      )}
     </Modal>
   );
 }
 
-// QuickBooks estimates often don't carry a PO number at all — there's
-// nothing for the importer to auto-extract — so this is how a manager adds
-// one after the fact. Also covers correcting a job number or description
-// the PDF parser mis-read.
-function EditPanelModal({ panel, onClose }) {
-  const { updatePanel } = useApp();
+// Full edit for a scheduled panel — every detail an admin might need to
+// correct, including its own price-per-connection rate (see the note on
+// initialPricePerConnection in mockData.js for why that's locked per panel
+// rather than shared) — plus the ability to remove it from the schedule
+// entirely.
+function EditPanelModal({ panel, onClose, onDeleted }) {
+  const { updatePanel, deletePanel } = useApp();
+  const [customer, setCustomer] = useState(panel.customer || "");
   const [jobNumber, setJobNumber] = useState(panel.jobNumber || "");
   const [poNumber, setPoNumber] = useState(panel.poNumber || "");
   const [description, setDescription] = useState(panel.order || "");
+  const [dateAdded, setDateAdded] = useState(panel.dateAdded || "");
+  const [price, setPrice] = useState(String(panel.price ?? ""));
+  const [rate, setRate] = useState(String(panel.pricePerConnection ?? ""));
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  const priceNum = Number(price);
+  const rateNum = Number(rate);
+  const previewConnections =
+    Number.isFinite(priceNum) && Number.isFinite(rateNum) && rateNum > 0 ? Math.round(priceNum / rateNum) : null;
 
   function handleSave() {
     updatePanel(panel.buildId, {
+      customer: customer.trim() || "Unknown Customer",
       jobNumber: jobNumber.trim(),
       poNumber: poNumber.trim(),
       order: description.trim(),
+      dateAdded: dateAdded || panel.dateAdded,
+      price: Number.isFinite(priceNum) && priceNum >= 0 ? priceNum : panel.price,
+      pricePerConnection: Number.isFinite(rateNum) && rateNum > 0 ? rateNum : panel.pricePerConnection,
     });
     onClose();
+  }
+
+  function handleDelete() {
+    deletePanel(panel.buildId);
+    onDeleted?.();
+  }
+
+  if (confirmingDelete) {
+    return (
+      <Modal onClose={() => setConfirmingDelete(false)} widthClass="max-w-sm">
+        <h3 className="text-base font-bold text-ink-900 mb-2">Delete Panel #{panel.id}?</h3>
+        <p className="text-sm text-ink-600 mb-1">
+          Job #{panel.jobNumber || "—"}
+          {panel.customer ? ` · ${panel.customer}` : ""} will be removed from the schedule permanently.
+        </p>
+        <p className="text-[12px] text-ink-500 mb-5">
+          Any hours already logged against it stay on record for reporting, but won't be linked to a panel anymore.
+          This can't be undone.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => setConfirmingDelete(false)}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={handleDelete}>
+            Delete Panel
+          </Button>
+        </div>
+      </Modal>
+    );
   }
 
   return (
     <Modal onClose={onClose} widthClass="max-w-sm">
       <h3 className="text-base font-bold text-ink-900 mb-4">Edit Panel Details — #{panel.id}</h3>
+
+      <label className="text-xs font-semibold text-ink-500">Customer</label>
+      <input
+        value={customer}
+        onChange={(e) => setCustomer(e.target.value)}
+        className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
+      />
 
       <label className="text-xs font-semibold text-ink-500">Job Number</label>
       <input
@@ -263,14 +344,61 @@ function EditPanelModal({ panel, onClose }) {
       <input
         value={description}
         onChange={(e) => setDescription(e.target.value)}
-        className="mt-1 mb-5 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
+        className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
       />
 
-      <div className="flex justify-end gap-2">
-        <Button variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button onClick={handleSave}>Save</Button>
+      <label className="text-xs font-semibold text-ink-500">Date Added</label>
+      <input
+        type="date"
+        value={dateAdded}
+        onChange={(e) => setDateAdded(e.target.value)}
+        className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
+      />
+
+      <div className="grid grid-cols-2 gap-3 mb-1">
+        <div>
+          <label className="text-xs font-semibold text-ink-500">Estimate ($)</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
+          />
+        </div>
+        <div>
+          <label className="text-xs font-semibold text-ink-500">$ / connection</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0.01"
+            value={rate}
+            onChange={(e) => setRate(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
+          />
+        </div>
+      </div>
+      <p className="text-[11px] text-ink-500 mb-5">
+        {previewConnections !== null
+          ? `= ${formatNumber(previewConnections)} connections at this rate`
+          : "Enter an estimate and rate to see connections"}{" "}
+        — this rate applies only to this panel, not the shop default.
+      </p>
+
+      <div className="flex items-center justify-between pt-3 border-t border-paper-100">
+        <button
+          onClick={() => setConfirmingDelete(true)}
+          className="text-[12px] font-semibold text-bad-600 hover:text-bad-700"
+        >
+          Delete this panel
+        </button>
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={handleSave}>Save</Button>
+        </div>
       </div>
     </Modal>
   );

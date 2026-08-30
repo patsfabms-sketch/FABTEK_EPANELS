@@ -184,18 +184,28 @@ export const initialWorkHistory = [];
 // people can be on the same panel doing different stages simultaneously.
 export const initialActiveSessions = [];
 
-// Default $/connection used to derive a panel's expected connection count from
-// its QuickBooks estimate amount. Managers can adjust this on the Dashboard.
+// Default $/connection applied to a panel at the moment it's imported — see
+// the note on `pricePerConnection` below for why this is a snapshot rather
+// than a live shared setting. Managers can adjust the default (used for
+// future imports) on the Estimates page.
 export const initialPricePerConnection = 0.75;
 
-// Panel registry — populated by importing a QuickBooks estimate CSV on the
-// manager Estimates page. `price` is the estimate line amount for the panel;
-// its connection count is derived from price / pricePerConnection, not stored.
+// Panel registry — populated by importing a QuickBooks estimate on the
+// manager Estimates page. `price` is the estimate line amount for the panel.
+// Each panel carries its own `pricePerConnection`, locked in at the moment
+// it was imported — NOT the shop's current default rate — so raising the
+// rate going forward never silently reprices work that was already quoted
+// or built. Its connection count is derived from price / that panel's own
+// rate, not stored.
 export const initialPanels = [];
 
-export function connectionsForPanel(panel, pricePerConnection) {
-  if (!panel || !pricePerConnection) return 0;
-  return Math.round(panel.price / pricePerConnection);
+// fallbackRate covers panels persisted before this field existed, which
+// have no pricePerConnection of their own — for those (and only those) this
+// falls back to the shop's current default rate.
+export function connectionsForPanel(panel, fallbackRate) {
+  const rate = panel?.pricePerConnection ?? fallbackRate;
+  if (!panel || !rate) return 0;
+  return Math.round(panel.price / rate);
 }
 
 // The string encoded into a panel's printed QR code. Kept as a single,

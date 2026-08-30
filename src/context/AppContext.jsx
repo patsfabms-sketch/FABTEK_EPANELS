@@ -336,6 +336,9 @@ export function AppProvider({ children }) {
             customer: r.customer || "Unknown Customer",
             order: r.order || "",
             price: r.price,
+            // Locked in at import time — see the note on initialPricePerConnection
+            // in mockData.js for why this isn't a live lookup.
+            pricePerConnection,
             jobNumber: r.jobNumber || "",
             poNumber: r.poNumber || "",
             dateAdded: today,
@@ -373,6 +376,26 @@ export function AppProvider({ children }) {
   // have more than one build on file.
   function updatePanel(buildId, fields) {
     setPanels((prev) => prev.map((p) => (p.buildId === buildId ? { ...p, ...fields } : p)));
+  }
+
+  // Removes one build from the schedule entirely (e.g. it was entered by
+  // mistake, or the job was cancelled). Any workHistory already logged
+  // against it is left as-is — it stays a real historical record of hours
+  // worked, it just won't be attributable to a panel record anymore.
+  function deletePanel(buildId) {
+    const panel = panels.find((p) => p.buildId === buildId);
+    setPanels((prev) => prev.filter((p) => p.buildId !== buildId));
+    setActivityFeed((prev) => [
+      {
+        id: `a${Date.now()}`,
+        who: currentAdmin?.name ?? "Manager",
+        action: `deleted panel #${panel?.jobNumber || panel?.id || ""} from the schedule`,
+        ref: panel ? `Panel #${panel.id}` : "",
+        time: "just now",
+        kind: "scan",
+      },
+      ...prev,
+    ]);
   }
 
   const employeesWithAttainment = useMemo(
@@ -530,6 +553,7 @@ export function AppProvider({ children }) {
     setPricePerConnection,
     importEstimates,
     updatePanel,
+    deletePanel,
     startSession,
     setSessionNotes,
     stopSession,

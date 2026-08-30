@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "../../context/AppContext";
-import { connectionsForPanel } from "../../data/mockData";
 import { parseEstimateCsv, parseEstimatePdf } from "../../data/estimateImport";
-import { Card, SectionTitle, Button, formatNumber, formatDate } from "../../components/ui";
+import { Card, SectionTitle, Button } from "../../components/ui";
 
 function readFileAsText(file) {
   return new Promise((resolve, reject) => {
@@ -26,45 +25,6 @@ function readFileAsDataUrl(file) {
 // it can be opened again later from the panel detail view — "the original
 // document of the PDF estimate should also be available to view". CSV
 // imports have no source document to attach.
-// Most QuickBooks estimates simply don't carry a PO number — there's nothing
-// for the importer to extract — so this cell lets a manager type one in
-// right where the import just landed, without a separate trip to the panel
-// detail view.
-function PoCell({ panel }) {
-  const { updatePanel } = useApp();
-  const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(panel.poNumber || "");
-
-  useEffect(() => setValue(panel.poNumber || ""), [panel.poNumber]);
-
-  function save() {
-    updatePanel(panel.buildId, { poNumber: value.trim() });
-    setEditing(false);
-  }
-
-  if (editing) {
-    return (
-      <input
-        autoFocus
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onBlur={save}
-        onKeyDown={(e) => e.key === "Enter" && save()}
-        className="w-28 rounded-md border border-brand-300 px-1.5 py-1 text-[12px]"
-      />
-    );
-  }
-
-  return (
-    <button
-      onClick={() => setEditing(true)}
-      className={panel.poNumber ? "hover:text-brand-600" : "text-ink-400 italic hover:text-brand-600"}
-    >
-      {panel.poNumber || "add PO…"}
-    </button>
-  );
-}
-
 async function parseEstimateFile(file) {
   if (file.name.toLowerCase().endsWith(".pdf") || file.type === "application/pdf") {
     const [{ rows, errors }, pdfDataUrl] = await Promise.all([parseEstimatePdf(file), readFileAsDataUrl(file)]);
@@ -80,7 +40,7 @@ export default function Estimates() {
         <div>
           <h1 className="text-xl font-bold text-ink-900">Panel Estimates</h1>
           <p className="text-sm text-ink-500 mt-1">
-            Import QuickBooks estimates and set the rate used to derive panel connection counts
+            Import QuickBooks estimates and set the default rate used to price new panels
           </p>
         </div>
       </div>
@@ -91,7 +51,7 @@ export default function Estimates() {
 }
 
 function PanelEstimatesCard() {
-  const { panels, pricePerConnection, setPricePerConnection, importEstimates } = useApp();
+  const { pricePerConnection, setPricePerConnection, importEstimates } = useApp();
   const [rateInput, setRateInput] = useState(String(pricePerConnection));
   const [dragging, setDragging] = useState(false);
   const [importMsg, setImportMsg] = useState(null);
@@ -119,9 +79,7 @@ function PanelEstimatesCard() {
     setImportMsg({
       ok: allRows.length > 0,
       text: allRows.length
-        ? `Imported ${allRows.length} panel${allRows.length === 1 ? "" : "s"} from ${files.length} file${
-            files.length === 1 ? "" : "s"
-          }.${allErrors.length ? ` ${allErrors.length} line(s) skipped.` : ""}`
+        ? `Schedule is updated.${allErrors.length ? ` ${allErrors.length} line(s) skipped.` : ""}`
         : allErrors[0] || "No panels could be imported from these files.",
     });
   }
@@ -140,12 +98,12 @@ function PanelEstimatesCard() {
     <Card>
       <SectionTitle
         title="Panel Estimates"
-        subtitle="Import a QuickBooks estimate to set panel connection counts from the estimate price"
+        subtitle="Import a QuickBooks estimate to schedule new panels — imported panels and their details live on the Panels page"
       />
 
       <div className="flex items-end gap-3 mb-4">
         <div>
-          <label className="text-xs font-semibold text-ink-500">Price per connection</label>
+          <label className="text-xs font-semibold text-ink-500">Default price per connection</label>
           <div className="mt-1 flex items-center gap-1.5">
             <span className="text-sm text-ink-500">$</span>
             <input
@@ -158,6 +116,10 @@ function PanelEstimatesCard() {
             />
             <span className="text-xs text-ink-500">/ connection</span>
           </div>
+          <p className="text-[11px] text-ink-400 mt-1 max-w-sm">
+            Applied to panels as they're imported, not retroactively — raising this rate never reprices a panel
+            already on the schedule. To fix one panel's rate, edit it from its detail view on the Panels page.
+          </p>
         </div>
         <Button variant="subtle" onClick={saveRate}>
           Save Rate
@@ -195,39 +157,6 @@ function PanelEstimatesCard() {
           {importMsg.text}
         </p>
       )}
-
-      <div className="mt-5 overflow-x-auto">
-        <table className="w-full text-[12px]">
-          <thead>
-            <tr className="text-left text-ink-500 border-b border-paper-100">
-              <th className="py-1.5 pr-3 font-semibold">Panel</th>
-              <th className="py-1.5 pr-3 font-semibold">Job #</th>
-              <th className="py-1.5 pr-3 font-semibold">Customer</th>
-              <th className="py-1.5 pr-3 font-semibold">Date Added</th>
-              <th className="py-1.5 pr-3 font-semibold">PO #</th>
-              <th className="py-1.5 pr-3 font-semibold">Estimate</th>
-              <th className="py-1.5 pr-3 font-semibold text-right">Connections</th>
-            </tr>
-          </thead>
-          <tbody>
-            {panels.map((p) => (
-              <tr key={p.buildId} className="border-b border-paper-50">
-                <td className="py-1.5 pr-3 font-medium text-ink-900">#{p.id}</td>
-                <td className="py-1.5 pr-3 text-ink-600">{p.jobNumber || "—"}</td>
-                <td className="py-1.5 pr-3 text-ink-600">{p.customer}</td>
-                <td className="py-1.5 pr-3 text-ink-600">{formatDate(p.dateAdded)}</td>
-                <td className="py-1.5 pr-3 text-ink-600">
-                  <PoCell panel={p} />
-                </td>
-                <td className="py-1.5 pr-3 text-ink-600">${formatNumber(p.price)}</td>
-                <td className="py-1.5 pr-3 text-right font-semibold text-ink-900">
-                  {formatNumber(connectionsForPanel(p, pricePerConnection))}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </Card>
   );
 }

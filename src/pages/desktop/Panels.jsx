@@ -6,7 +6,7 @@ import PanelDetailModal from "../../components/PanelDetailModal";
 
 export default function Panels() {
   const { panels, pricePerConnection, activeSessions, employees, workHistory } = useApp();
-  const [selectedGroup, setSelectedGroup] = useState(null);
+  const [selectedBuildId, setSelectedBuildId] = useState(null);
 
   const employeeById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
 
@@ -39,7 +39,7 @@ export default function Panels() {
   );
 
   const inProgress = panelGroups.filter((g) => g.active.length > 0);
-  const idle = panelGroups.filter((g) => g.active.length === 0);
+  const scheduled = panelGroups.filter((g) => g.active.length === 0);
   const totalTechs = inProgress.reduce((s, g) => s + g.active.length, 0);
 
   return (
@@ -58,26 +58,26 @@ export default function Panels() {
       </div>
 
       <SectionTitle title="Active Panels" subtitle="Panels with someone currently scanned in" />
-      <PanelTable groups={inProgress} emptyText="No panels currently in progress." onSelect={setSelectedGroup} />
+      <PanelTable groups={inProgress} emptyText="No panels currently in progress." onSelect={setSelectedBuildId} />
 
       <div className="mt-8">
-        <SectionTitle title="Idle Panels" subtitle="Panels in the registry with no one currently scanned in" />
+        <SectionTitle title="Scheduled Panels" subtitle="Panels queued for work — not yet scanned in" />
         <PanelTable
-          groups={idle}
+          groups={scheduled}
           emptyText={
             panels.length === 0
               ? "No panels yet — import a QuickBooks estimate on the Estimates page to add some."
               : "All registered panels are currently in progress."
           }
-          onSelect={setSelectedGroup}
+          onSelect={setSelectedBuildId}
         />
       </div>
 
-      {selectedGroup && (
+      {selectedBuildId && (
         <PanelDetailModal
-          group={selectedGroup}
-          onClose={() => setSelectedGroup(null)}
-          onSelectBuild={(build) => setSelectedGroup(makeGroup(build))}
+          buildId={selectedBuildId}
+          onClose={() => setSelectedBuildId(null)}
+          onSelectBuild={(buildId) => setSelectedBuildId(buildId)}
         />
       )}
     </div>
@@ -110,7 +110,7 @@ function PanelTable({ groups, emptyText, onSelect }) {
           {groups.map(({ panel, target, active, completed }) => (
             <tr
               key={panel.buildId}
-              onClick={() => onSelect({ panel, target, active, completed })}
+              onClick={() => onSelect(panel.buildId)}
               className="border-b border-paper-100 last:border-0 cursor-pointer hover:bg-brand-50/60 transition-colors"
             >
               <td className="px-4 py-3 font-semibold text-ink-900 whitespace-nowrap">
@@ -133,7 +133,7 @@ function PanelTable({ groups, emptyText, onSelect }) {
                 ) : completed.length > 0 ? (
                   <span className="text-ink-500">{completed.length} logged</span>
                 ) : (
-                  <span className="text-ink-400">Idle</span>
+                  <span className="text-ink-400">Scheduled</span>
                 )}
               </td>
             </tr>
