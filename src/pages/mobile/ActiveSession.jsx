@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
 import { Button, formatNumber } from "../../components/ui";
+import { unitLabel } from "../../data/mockData";
 
 export default function ActiveSession() {
   const { session, setSessionNotes, stopSession, panels } = useApp();
@@ -58,7 +59,14 @@ export default function ActiveSession() {
           <span className="w-1.5 h-1.5 rounded-full bg-good-500 animate-pulse" /> Active Work Session
         </p>
       </div>
-      <h1 className="text-lg font-bold text-ink-900">Panel {session.panel}</h1>
+      <h1 className="text-lg font-bold text-ink-900">
+        Panel {session.panel}
+        {activePanel && unitLabel(activePanel) && (
+          <span className="ml-1.5 inline-block rounded-full bg-brand-50 text-brand-700 text-[11px] font-semibold px-2 py-0.5 align-middle">
+            {unitLabel(activePanel)}
+          </span>
+        )}
+      </h1>
       {activePanel && (
         <p className="text-[11px] text-ink-500 mt-0.5">
           Customer {activePanel.customer} · {activePanel.order}

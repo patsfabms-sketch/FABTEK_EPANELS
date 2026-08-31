@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import QRCode from "qrcode";
 import { useApp } from "../context/AppContext";
-import { panelQrValue, siblingBuilds, computeBuildStats, connectionsForPanel, taskProgress } from "../data/mockData";
+import { panelQrValue, siblingBuilds, computeBuildStats, connectionsForPanel, taskProgress, unitLabel } from "../data/mockData";
 import { getPdfBlob } from "../data/pdfStore";
 import { Modal, Button, RoleBadge, formatNumber, formatDate } from "./ui";
 
@@ -83,6 +83,11 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
           <h2 className="text-lg font-bold text-ink-900">
             Job #{panel.jobNumber || panel.id}
             {panel.jobNumber && <span className="text-ink-400 font-normal text-sm"> · Panel #{panel.id}</span>}
+            {unitLabel(panel) && (
+              <span className="ml-2 inline-block rounded-full bg-brand-50 text-brand-700 text-[11px] font-semibold px-2 py-0.5 align-middle">
+                {unitLabel(panel)}
+              </span>
+            )}
           </h2>
           <p className="text-sm text-ink-500 mt-0.5">
             {panel.customer}
@@ -305,7 +310,12 @@ function EditPanelModal({ panel, onClose, onDeleted }) {
 
   return (
     <Modal onClose={onClose} widthClass="max-w-sm">
-      <h3 className="text-base font-bold text-ink-900 mb-4">Edit Panel Details — #{panel.id}</h3>
+      <h3 className="text-base font-bold text-ink-900 mb-1">Edit Panel Details — #{panel.id}</h3>
+      <p className="text-[11px] text-brand-700 mb-4">
+        {unitLabel(panel)
+          ? `${unitLabel(panel)} — this is one of ${panel.unitCount} identical panels split off the same estimate line. The price/connection rate below applies to this physical unit only.`
+          : " "}
+      </p>
 
       <label className="text-xs font-semibold text-ink-500">Customer</label>
       <input
@@ -447,7 +457,7 @@ async function composeQrLabel(qrDataUrl, panel) {
   ctx.textBaseline = "top";
   ctx.fillStyle = "#111111";
 
-  const line1 = `Job #${panel.jobNumber || "—"}  ·  Panel #${panel.id}`;
+  const line1 = `Job #${panel.jobNumber || "—"}  ·  Panel #${panel.id}${unitLabel(panel) ? `  ·  ${unitLabel(panel)}` : ""}`;
   ctx.font = `bold ${line1FontPx}px Arial, sans-serif`;
   ctx.fillText(truncateToWidth(ctx, line1, maxTextWidth), size / 2, size + padding / 2);
 
@@ -508,7 +518,9 @@ async function composeQrLabelSvg(panel) {
   const textBlockHeight = line1FontPx + lineGap + line2FontPx + padding * 1.5;
   const totalHeight = size + textBlockHeight;
 
-  const line1 = escapeXml(`Job #${panel.jobNumber || "—"}  ·  Panel #${panel.id}`);
+  const line1 = escapeXml(
+    `Job #${panel.jobNumber || "—"}  ·  Panel #${panel.id}${unitLabel(panel) ? `  ·  ${unitLabel(panel)}` : ""}`
+  );
   const line2 = escapeXml(panel.order || panel.customer || "");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -731,6 +743,7 @@ function PrintQrModal({ panel, onClose }) {
       </div>
       <p className="text-center text-[12px] font-semibold text-ink-900">
         Job #{panel.jobNumber || "—"} · Panel #{panel.id}
+        {unitLabel(panel) && <span className="text-brand-600"> · {unitLabel(panel)}</span>}
       </p>
       {(panel.order || panel.customer) && (
         <p className="text-center text-[11px] text-ink-500 mb-1 truncate">{panel.order || panel.customer}</p>
@@ -846,6 +859,7 @@ function PrintQrModal({ panel, onClose }) {
                 <img src={dataUrl} alt="" />
                 <p className="qr-line1">
                   Job #{panel.jobNumber || "—"} · Panel #{panel.id}
+                  {unitLabel(panel) ? ` · ${unitLabel(panel)}` : ""}
                 </p>
                 {(panel.order || panel.customer) && <p className="qr-line2">{panel.order || panel.customer}</p>}
               </div>

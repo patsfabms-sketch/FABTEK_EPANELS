@@ -181,6 +181,18 @@ export function connectionsForPanel(panel, fallbackRate) {
   return Math.round(panel.price / rate);
 }
 
+// When an estimate line item has Qty > 1 (e.g. "2" identical panels on one
+// order), the importer splits it into that many separate, independently
+// trackable panel records — see estimateImport.js — each carrying its own
+// unitIndex (1-based) and unitCount (the original qty) so the UI can label
+// them "Unit 1 of 2" / "Unit 2 of 2" and a person can tell which physical
+// panel is which. Returns "" for an ordinary single-unit panel (unitCount
+// unset or 1) so callers can just do `{unitLabel(panel) && ...}`.
+export function unitLabel(panel) {
+  if (!panel?.unitCount || panel.unitCount <= 1) return "";
+  return `Unit ${panel.unitIndex} of ${panel.unitCount}`;
+}
+
 // The string encoded into a panel's printed QR code. Kept as a single,
 // namespaced convention (rather than the bare panel id) so a future real
 // camera-scan implementation on the mobile app can reliably recognize an

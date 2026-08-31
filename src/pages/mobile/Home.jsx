@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
-import { productionStages, connectionsForPanel, taskProgress, currentBuilds, parsePanelQrValue } from "../../data/mockData";
+import { productionStages, connectionsForPanel, taskProgress, currentBuilds, parsePanelQrValue, unitLabel } from "../../data/mockData";
 import { Button, formatNumber } from "../../components/ui";
 import QrScanner from "../../components/QrScanner";
 
@@ -194,7 +194,14 @@ export default function Home() {
                           onClick={() => handleScan(p)}
                           className="w-full flex items-center justify-between rounded-lg border border-paper-200 px-3 py-2.5 text-left hover:border-brand-400"
                         >
-                          <span className="text-sm font-medium text-ink-900">#{p.id}</span>
+                          <span className="text-sm font-medium text-ink-900">
+                            #{p.id}
+                            {unitLabel(p) && (
+                              <span className="ml-1 inline-block rounded-full bg-brand-50 text-brand-700 text-[10px] font-semibold px-1.5 py-0.5 align-middle">
+                                {unitLabel(p)}
+                              </span>
+                            )}
+                          </span>
                           <span className="text-[11px] text-ink-500">{p.customer}</span>
                         </button>
                       ))}
@@ -215,7 +222,14 @@ export default function Home() {
                 </button>
 
                 <div className="rounded-lg bg-paper-50 border border-paper-200 px-3 py-2.5 mb-4">
-                  <p className="text-sm font-semibold text-ink-900">Panel #{scannedPanel.id}</p>
+                  <p className="text-sm font-semibold text-ink-900">
+                    Panel #{scannedPanel.id}
+                    {unitLabel(scannedPanel) && (
+                      <span className="ml-1.5 inline-block rounded-full bg-brand-50 text-brand-700 text-[10px] font-semibold px-1.5 py-0.5 align-middle">
+                        {unitLabel(scannedPanel)}
+                      </span>
+                    )}
+                  </p>
                   <p className="text-[11px] text-ink-500 mt-0.5">{scannedPanel.customer} · {scannedPanel.order}</p>
                   <p className="text-[11px] font-semibold text-brand-700 mt-1">
                     {formatNumber(connectionsForPanel(scannedPanel, pricePerConnection))} connections on this panel

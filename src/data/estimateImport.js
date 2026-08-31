@@ -47,9 +47,15 @@ export function parseEstimateCsv(text) {
   const idCol = findColumn(header, ["panel", "job", "product/service", "num"]);
   const customerCol = findColumn(header, ["customer", "client"]);
   const orderCol = findColumn(header, ["description", "memo", "item"]);
+  // "amount"/"total" are checked first specifically so a Qty > 1 row's
+  // *extended* total is what lands here, not a same-row unit "rate" column
+  // — see the qty-splitting block below, which divides this by qty to get
+  // each unit's own price. "price"/"rate" stay as fallbacks for exports
+  // that only have one price-like column at all (implicitly qty 1 there).
   const priceCol = findColumn(header, ["amount", "total", "price", "rate"]);
   const poCol = findColumn(header, ["po number", "po #", "p.o.", "purchase order"]);
   const jobNumberCol = findColumn(header, ["estimate no", "estimate #", "estimate number"]);
+  const qtyCol = findColumn(header, ["qty", "quantity"]);
 
   if (idCol === -1 || priceCol === -1) {
     return {
@@ -72,15 +78,20 @@ export function parseEstimateCsv(text) {
     }
 
     const rawJobNumber = jobNumberCol !== -1 ? cells[jobNumberCol]?.trim() : "";
+    const rawQty = qtyCol !== -1 ? cells[qtyCol]?.trim() : "";
+    const qty = Math.round(Number(rawQty));
 
-    rows.push({
-      id: rawId,
+    const base = {
       customer: customerCol !== -1 ? cells[customerCol]?.trim() : "",
       order: orderCol !== -1 ? cells[orderCol]?.trim() : "",
-      price,
       jobNumber: rawJobNumber ? stripJobNumberYear(rawJobNumber) : "",
       poNumber: poCol !== -1 ? cells[poCol]?.trim() : "",
-    });
+    };
+    // `price` above is the matched column's raw value — for a real
+    // QuickBooks export that's the extended Amount, so a Qty > 1 row's
+    // per-unit price is that divided by qty (see pushUnitRows).
+    const unitPrice = Number.isFinite(qty) && qty > 0 ? price / qty : price;
+    pushUnitRows(rows, base, rawId, price, unitPrice, qty);
   }
 
   return { rows, errors };
@@ -191,6 +202,12 @@ function extractDocumentFields(lines) {
 // whole cell is kept verbatim as the panel's description; the leading
 // number doubles as this app's internal panel id, and everything after it
 // as the customer name.
+//
+// Qty and the per-unit Rate are both captured (not just the extended
+// Amount) so a Qty > 1 line — several identical physical panels on one
+// order — can be split into that many separately-tracked panel records,
+// each priced at its own share rather than the combined total. See
+// parseEstimateLines below for the actual split.
 function parseLineItemRow(line) {
   const itemMatch = line.match(/^(\d+)\.\s+(.*)$/);
   if (!itemMatch) return null;
@@ -200,11 +217,21 @@ function parseLineItemRow(line) {
   if (amounts.length === 0) return null;
   const amount = Number(amounts[amounts.length - 1][1].replace(/,/g, ""));
   if (!Number.isFinite(amount) || amount <= 0) return null;
+  // QuickBooks prints "Qty  Rate  Amount" — when both a rate and an amount
+  // are present (two $ figures), the rate is the per-unit price. When only
+  // one $ figure is on the line, there's nothing to divide, so the single
+  // figure serves as both.
+  const unitPrice =
+    amounts.length >= 2 ? Number(amounts[amounts.length - 2][1].replace(/,/g, "")) : amount;
 
   const dollarIndex = rest.indexOf("$");
   const beforeAmounts = (dollarIndex === -1 ? rest : rest.slice(0, dollarIndex)).trim();
   const words = beforeAmounts.split(/\s+/);
-  if (words.length && /^\d+$/.test(words[words.length - 1])) words.pop(); // trailing qty
+  let qty = 1;
+  if (words.length && /^\d+$/.test(words[words.length - 1])) {
+    const parsedQty = Number(words.pop()); // trailing qty
+    if (Number.isFinite(parsedQty) && parsedQty > 0) qty = parsedQty;
+  }
 
   const numIdx = words.findIndex((w) => /^\d{3,}$/.test(w));
   if (numIdx === -1) return null;
@@ -214,6 +241,8 @@ function parseLineItemRow(line) {
     customer: words.slice(numIdx + 1).join(" ").trim(),
     description: words.slice(numIdx).join(" "),
     price: amount,
+    unitPrice,
+    qty,
   };
 }
 
@@ -230,14 +259,13 @@ function parseEstimateLines(lines) {
       errors.push(`Line ${i + 1}: couldn't read a panel number and amount from "${line}".`);
       return;
     }
-    rows.push({
-      id: parsed.id,
+    const base = {
       customer: parsed.customer || billTo || "Unknown Customer",
       order: parsed.description || billTo,
-      price: parsed.price,
       jobNumber,
       poNumber,
-    });
+    };
+    pushUnitRows(rows, base, parsed.id, parsed.price, parsed.unitPrice, parsed.qty);
   });
 
   if (rows.length === 0 && errors.length === 0) {
@@ -245,6 +273,31 @@ function parseEstimateLines(lines) {
   }
 
   return { rows, errors };
+}
+
+// Shared by both the PDF and CSV importers: a Qty-1 line item becomes one
+// ordinary row exactly as before (same id, no unit fields — so every panel
+// imported before this feature existed, and every plain single-unit import
+// going forward, is untouched). A Qty > 1 line item — several identical
+// physical panels on one order — becomes `qty` separate rows instead, each
+// with its own suffixed id (so it's independently scannable/trackable —
+// see currentBuilds() in mockData.js, which is keyed on id) and priced at
+// its own per-unit share, so connectionsForPanel() naturally gives each
+// unit its own connection count rather than the combined total.
+function pushUnitRows(rows, base, baseId, extendedPrice, unitPrice, qty) {
+  if (!qty || qty <= 1) {
+    rows.push({ ...base, id: baseId, price: extendedPrice });
+    return;
+  }
+  for (let unitIndex = 1; unitIndex <= qty; unitIndex++) {
+    rows.push({
+      ...base,
+      id: `${baseId}-${unitIndex}`,
+      price: unitPrice,
+      unitIndex,
+      unitCount: qty,
+    });
+  }
 }
 
 export async function parseEstimatePdf(file) {

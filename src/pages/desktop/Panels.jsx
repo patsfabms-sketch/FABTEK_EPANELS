@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useApp } from "../../context/AppContext";
-import { connectionsForPanel, taskProgress, currentBuilds } from "../../data/mockData";
+import { connectionsForPanel, taskProgress, currentBuilds, unitLabel } from "../../data/mockData";
 import { SectionTitle, formatNumber, formatDate } from "../../components/ui";
 import PanelDetailModal from "../../components/PanelDetailModal";
 
@@ -115,6 +115,11 @@ function PanelTable({ groups, emptyText, onSelect }) {
             >
               <td className="px-4 py-3 font-semibold text-ink-900 whitespace-nowrap">
                 #{panel.jobNumber || panel.id}
+                {unitLabel(panel) && (
+                  <span className="ml-1.5 inline-block rounded-full bg-brand-50 text-brand-700 text-[10px] font-semibold px-1.5 py-0.5 align-middle">
+                    {unitLabel(panel)}
+                  </span>
+                )}
               </td>
               <td className="px-4 py-3 text-ink-700">
                 <span className="font-medium text-ink-900">{panel.customer}</span>

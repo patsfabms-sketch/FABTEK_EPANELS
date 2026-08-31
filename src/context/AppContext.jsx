@@ -82,6 +82,11 @@ const PANEL_FIELD_MAP = {
   dateAdded: "date_added",
   pdfId: "pdf_path",
   pdfFileName: "pdf_file_name",
+  // Set only for a panel split off a Qty > 1 estimate line item — see
+  // estimateImport.js's pushUnitRows and mockData.js's unitLabel(). Both
+  // null for an ordinary single-unit panel.
+  unitIndex: "unit_index",
+  unitCount: "unit_count",
 };
 function toDbPanel(p) {
   const out = {};
@@ -113,6 +118,8 @@ function fromDbPanel(row) {
     dateAdded: row.date_added,
     pdfId: row.pdf_path,
     pdfFileName: row.pdf_file_name,
+    unitIndex: row.unit_index ?? null,
+    unitCount: row.unit_count ?? null,
   };
 }
 
@@ -574,6 +581,13 @@ export function AppProvider({ children }) {
   // when it looks like the *same* job — its job number matches the current
   // build's (or either side is blank) — treating it as a revised estimate
   // for work that hasn't necessarily started yet, not a new build.
+  //
+  // A Qty > 1 estimate line item arrives here already split into `qty`
+  // separate rows, each with its own suffixed id ("1100012-1", "1100012-2",
+  // ...) — see estimateImport.js's pushUnitRows. Each one is matched/
+  // created/updated independently by the same id-based logic below, exactly
+  // like any other panel; nothing here needs to know quantity was ever
+  // involved.
   function importEstimates(rows) {
     if (!rows.length) return;
     const today = new Date().toISOString().slice(0, 10);
@@ -599,6 +613,8 @@ export function AppProvider({ children }) {
             // stays a small string either way.
             pdfId: r.pdfId || current.pdfId || null,
             pdfFileName: r.pdfFileName || current.pdfFileName || null,
+            unitIndex: r.unitIndex ?? current.unitIndex ?? null,
+            unitCount: r.unitCount ?? current.unitCount ?? null,
           };
           next[currentIdx] = updated;
           changed.push(updated);
@@ -619,6 +635,8 @@ export function AppProvider({ children }) {
             dateAdded: today,
             pdfId: r.pdfId || null,
             pdfFileName: r.pdfFileName || null,
+            unitIndex: r.unitIndex ?? null,
+            unitCount: r.unitCount ?? null,
           };
           next.push(created);
           changed.push(created);
