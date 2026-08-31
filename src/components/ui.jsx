@@ -129,13 +129,37 @@ export function SaveErrorBanner({ saveError }) {
 // the login screen for a moment (currentAdmin/currentUser both start out
 // unresolved until the roster has actually loaded) before landing on the
 // right screen.
-export function LoadingScreen() {
+//
+// `connectionFailed` covers the case that used to look identical to being
+// logged out: the initial fetch failed (bad wifi, e.g. on the shop floor)
+// and AppContext is retrying it in the background — see the "Initial load"
+// effect in AppContext.jsx. `ready` stays false the whole time, so this
+// screen (never the Login/AdminLogin screen) is what shows until it
+// recovers, for a device that's already signed in and one that isn't alike.
+export function LoadingScreen({ connectionFailed = false, onRetry } = {}) {
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-paper-50">
+    <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-paper-50 px-6 text-center">
       <div className="w-10 h-10 rounded-xl bg-brand-500 text-white flex items-center justify-center font-bold text-lg animate-pulse">
         A
       </div>
-      <p className="text-xs text-ink-400">Loading AssemblyOS…</p>
+      {connectionFailed ? (
+        <>
+          <p className="text-xs font-semibold text-bad-600">Can't reach the AssemblyOS server</p>
+          <p className="text-[11px] text-ink-400 max-w-[240px]">
+            Check the connection here — this will move on by itself as soon as it's back, or try again now.
+          </p>
+          {onRetry && (
+            <button
+              onClick={onRetry}
+              className="mt-1 text-[11px] font-semibold text-brand-600 hover:text-brand-700"
+            >
+              Retry now
+            </button>
+          )}
+        </>
+      ) : (
+        <p className="text-xs text-ink-400">Loading AssemblyOS…</p>
+      )}
     </div>
   );
 }

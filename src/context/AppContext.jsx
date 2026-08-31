@@ -139,6 +139,30 @@ function toDbWorkHistory(h) {
     status: h.status,
   };
 }
+// Partial-update mapper for correcting an existing row — see
+// updateWorkHistoryEntry below (EmployeeDetail.jsx's Recent Activity table).
+// toDbWorkHistory above stays as the full-row insert mapper used by
+// stopSession; this only needs to cover fields an admin correction can touch.
+const WORKHISTORY_FIELD_MAP = {
+  employeeId: "employee_id",
+  date: "date",
+  panel: "panel",
+  stage: "stage",
+  buildId: "build_id",
+  percentAdded: "percent_added",
+  taskCompleted: "task_completed",
+  connectionsCredited: "connections_credited",
+  panels: "panels",
+  hours: "hours",
+  status: "status",
+};
+function toDbWorkHistoryFields(fields) {
+  const out = {};
+  Object.entries(fields).forEach(([k, v]) => {
+    out[WORKHISTORY_FIELD_MAP[k] ?? k] = v;
+  });
+  return out;
+}
 function fromDbWorkHistory(row) {
   return {
     id: row.id,
@@ -209,6 +233,15 @@ export function AppProvider({ children }) {
   const [admins, setAdmins] = useState([]);
   const [ready, setReady] = useState(false);
 
+  // Set only while the initial load is actively failing/retrying (never
+  // cleared to false until a load actually succeeds). Lets MobileLayout/
+  // DesktopLayout show a "can't reach the server, retrying…" screen instead
+  // of silently sitting on the plain loading spinner forever — see the
+  // initial-load effect below for why this can't just fall through to
+  // ready=true on failure like it used to.
+  const [initialLoadFailed, setInitialLoadFailed] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
+
   // `saveError` now means "the last read/write against the shared backend
   // failed" (network down, Supabase unreachable) — see SaveErrorBanner,
   // mounted in both layouts.
@@ -257,8 +290,27 @@ export function AppProvider({ children }) {
   }
 
   // ---- Initial load ---------------------------------------------------------
+  // IMPORTANT: `ready` must only ever flip to true on a SUCCESSFUL load. It
+  // used to flip to true on failure too (with just an error banner) — but
+  // that's what was silently logging technicians out. `currentUser` is
+  // computed as `employees.find(id === currentUserId)`, so if this fetch
+  // fails once and gives up, `employees` stays empty forever and a device
+  // that's genuinely already signed in (currentUserId correctly set in
+  // localStorage) falls through to the Login screen in MobileLayout/
+  // AdminLogin in DesktopLayout — indistinguishable from actually being
+  // logged out, and previously unrecoverable without a manual page reload,
+  // since nothing retried. A single network blip on shop-floor wifi right
+  // when the app opens (or right after a PWA auto-update reload) was enough
+  // to trigger this. Now: on failure, keep retrying with capped backoff
+  // instead of giving up, and never set `ready` until one succeeds — see
+  // `initialLoadFailed`/`retryConnection`, which let the layouts show a
+  // "can't reach the server" retry screen instead of Login/AdminLogin while
+  // this is in flight.
   useEffect(() => {
     let cancelled = false;
+    let attempt = 0;
+    let timer;
+
     async function load() {
       const results = await Promise.all([
         supabase.from("assemblyos_employees").select("*").order("name"),
@@ -275,9 +327,12 @@ export function AppProvider({ children }) {
         results;
       const firstError = results.find((r) => r.error)?.error;
       if (firstError) {
-        console.error("[AssemblyOS backend] initial load failed", firstError);
+        console.error("[AssemblyOS backend] initial load failed, retrying…", firstError);
         setSaveError(true);
-        setReady(true);
+        setInitialLoadFailed(true);
+        attempt += 1;
+        const delay = Math.min(3000 * 2 ** (attempt - 1), 20000); // 3s, 6s, 12s, 20s, 20s, ...
+        timer = setTimeout(load, delay);
         return;
       }
 
@@ -297,13 +352,21 @@ export function AppProvider({ children }) {
       setActiveSessions(activeSessionsRes.data.map(fromDbActiveSession));
       setActivityFeed(activityFeedRes.data.map(fromDbActivity));
       setSaveError(false);
+      setInitialLoadFailed(false);
       setReady(true);
     }
     load();
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, []);
+  }, [retryTick]);
+
+  // Lets a "can't reach the server" retry screen offer an immediate manual
+  // retry instead of waiting out the current backoff delay.
+  function retryConnection() {
+    setRetryTick((t) => t + 1);
+  }
 
   // ---- Realtime sync ---------------------------------------------------------
   // Every device — desktop console and every technician's phone — runs this
@@ -684,6 +747,41 @@ export function AppProvider({ children }) {
     );
   }
 
+  // Admin correction for a logged session entry — for mishaps: a technician
+  // scanned the wrong stage, mistyped/misremembered hours, the break-window
+  // math looked off, etc. See EmployeeDetail.jsx's Recent Activity table.
+  // Any subset of fields can be corrected; whatever isn't passed is left
+  // alone. This is also the only place `status` is ever set to "Flagged" —
+  // every session is stamped "Verified" at creation in stopSession, so
+  // flagging an entry for review is itself a manual admin action.
+  function updateWorkHistoryEntry(entryId, fields) {
+    const before = workHistory.find((h) => h.id === entryId);
+    setWorkHistory((prev) => prev.map((h) => (h.id === entryId ? { ...h, ...fields } : h)));
+    supabase.from("assemblyos_work_history").update(toDbWorkHistoryFields(fields)).eq("id", entryId).then(reportResult);
+    const emp = employees.find((e) => e.id === before?.employeeId);
+    logActivity(
+      `corrected a logged session for ${emp?.name ?? "a technician"}`,
+      before ? `${before.stage ?? "Session"} · Panel ${before.panel}` : "",
+      { kind: "verify" }
+    );
+  }
+
+  // Removes a logged session entirely — for entries that shouldn't exist at
+  // all (e.g. a session started and stopped against the wrong panel by
+  // mistake). Unlike deletePanel, there's no "kept but orphaned" fallback
+  // here since the entry itself is the mistake being corrected.
+  function deleteWorkHistoryEntry(entryId) {
+    const before = workHistory.find((h) => h.id === entryId);
+    setWorkHistory((prev) => prev.filter((h) => h.id !== entryId));
+    supabase.from("assemblyos_work_history").delete().eq("id", entryId).then(reportResult);
+    const emp = employees.find((e) => e.id === before?.employeeId);
+    logActivity(
+      `deleted a logged session for ${emp?.name ?? "a technician"}`,
+      before ? `${before.stage ?? "Session"} · Panel ${before.panel}` : "",
+      { kind: "verify" }
+    );
+  }
+
   const employeesWithAttainment = useMemo(
     () =>
       employees.map((emp) => ({
@@ -813,6 +911,8 @@ export function AppProvider({ children }) {
 
   const value = {
     ready,
+    initialLoadFailed,
+    retryConnection,
     roleDefaults,
     employees: employeesWithAttainment,
     pendingOverrides,
@@ -840,6 +940,8 @@ export function AppProvider({ children }) {
     importEstimates,
     updatePanel,
     deletePanel,
+    updateWorkHistoryEntry,
+    deleteWorkHistoryEntry,
     startSession,
     setSessionNotes,
     stopSession,

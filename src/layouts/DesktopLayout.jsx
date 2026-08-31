@@ -14,9 +14,9 @@ const NAV = [
 ];
 
 export default function DesktopLayout() {
-  const { currentAdmin, adminLogout, saveError, ready } = useApp();
+  const { currentAdmin, adminLogout, saveError, ready, initialLoadFailed, retryConnection } = useApp();
 
-  if (!ready) return <LoadingScreen />;
+  if (!ready) return <LoadingScreen connectionFailed={initialLoadFailed} onRetry={retryConnection} />;
   if (!currentAdmin) return <AdminLogin />;
 
   return (

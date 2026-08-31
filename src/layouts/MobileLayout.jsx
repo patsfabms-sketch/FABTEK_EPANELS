@@ -14,10 +14,10 @@ const TABS = [
 ];
 
 export default function MobileLayout() {
-  const { session, currentUser, currentAdmin, saveError, ready } = useApp();
+  const { session, currentUser, currentAdmin, saveError, ready, initialLoadFailed, retryConnection } = useApp();
   const navigate = useNavigate();
 
-  if (!ready) return <LoadingScreen />;
+  if (!ready) return <LoadingScreen connectionFailed={initialLoadFailed} onRetry={retryConnection} />;
 
   return (
     // Below the sm breakpoint (a real phone, including this installed as a
