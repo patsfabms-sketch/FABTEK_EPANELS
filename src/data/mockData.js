@@ -193,6 +193,51 @@ export function unitLabel(panel) {
   return `Unit ${panel.unitIndex} of ${panel.unitCount}`;
 }
 
+// Paid break windows — every day, regardless of when any individual work
+// session happens to start or stop, no time inside these windows is ever
+// credited as logged work. Expressed as [startMinute, endMinute] since
+// midnight, in the clock's local time (the same clock session.startedAt
+// already uses), so this reads directly against wall-clock time rather than
+// depending on anything about the session itself.
+export const BREAK_WINDOWS = [
+  { label: "Morning break", startMinute: 9 * 60 + 15, endMinute: 9 * 60 + 30 }, // 9:15–9:30 am
+  { label: "Lunch", startMinute: 11 * 60, endMinute: 11 * 60 + 30 }, // 11:00–11:30 am
+  { label: "Afternoon break", startMinute: 15 * 60 + 15, endMinute: 15 * 60 + 30 }, // 3:15–3:30 pm
+];
+
+// How much of [startedAt, endedAt) (both epoch ms) falls inside a break
+// window on any day the session touches. Walks day-by-day from the
+// session's start date through its end date so a session that happens to
+// run past midnight (rare, but not impossible for an overnight shift) still
+// gets every day's break windows checked, not just the first.
+function breakOverlapMs(startedAt, endedAt) {
+  if (!(endedAt > startedAt)) return 0;
+  let overlap = 0;
+  const dayCursor = new Date(startedAt);
+  dayCursor.setHours(0, 0, 0, 0);
+  for (let dayStart = dayCursor.getTime(); dayStart <= endedAt; dayStart += 86400000) {
+    BREAK_WINDOWS.forEach((w) => {
+      const breakStart = dayStart + w.startMinute * 60000;
+      const breakEnd = dayStart + w.endMinute * 60000;
+      const lo = Math.max(startedAt, breakStart);
+      const hi = Math.min(endedAt, breakEnd);
+      if (hi > lo) overlap += hi - lo;
+    });
+  }
+  return overlap;
+}
+
+// The actual "hours worked" clock for a session — raw elapsed time minus
+// whatever portion of it fell inside a break window. Used both for the
+// live-ticking stopwatch a technician sees on the Active Session screen and
+// for the hours actually recorded when they stop, so what's displayed while
+// working always matches what gets logged (never floors to negative).
+export function effectiveElapsedMs(startedAt, endedAt) {
+  if (!startedAt) return 0;
+  const raw = Math.max(0, endedAt - startedAt);
+  return Math.max(0, raw - breakOverlapMs(startedAt, endedAt));
+}
+
 // The string encoded into a panel's printed QR code. Kept as a single,
 // namespaced convention (rather than the bare panel id) so a future real
 // camera-scan implementation on the mobile app can reliably recognize an

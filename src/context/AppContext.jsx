@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
-import { initialRoleDefaults, attainment, taskProgress, generateUsername, CONNECT_STAGE_LABEL } from "../data/mockData";
+import { initialRoleDefaults, attainment, taskProgress, generateUsername, CONNECT_STAGE_LABEL, effectiveElapsedMs } from "../data/mockData";
 
 const AppContext = createContext(null);
 
@@ -752,7 +752,11 @@ export function AppProvider({ children }) {
   // connection count against the panel's target.
   function stopSession(percentAdded) {
     if (!session.active) return;
-    const hours = session.startedAt ? (Date.now() - session.startedAt) / 3600000 : 0;
+    // Paid break windows (9:15–9:30, 11:00–11:30, 3:15–3:30 every day) are
+    // never counted as logged work — effectiveElapsedMs subtracts whatever
+    // portion of this session's wall-clock span fell inside one, regardless
+    // of when the session actually started or stopped relative to it.
+    const hours = effectiveElapsedMs(session.startedAt, Date.now()) / 3600000;
     const pct = Math.max(0, Math.min(100 - session.startingProgress, percentAdded ?? 0));
     const isComplete = session.startingProgress + pct >= 100;
     const isConnectStage = session.stage === CONNECT_STAGE_LABEL;

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
 import { Button, formatNumber } from "../../components/ui";
-import { unitLabel } from "../../data/mockData";
+import { unitLabel, effectiveElapsedMs } from "../../data/mockData";
 
 export default function ActiveSession() {
   const { session, setSessionNotes, stopSession, panels } = useApp();
@@ -12,9 +12,13 @@ export default function ActiveSession() {
   const [showStopModal, setShowStopModal] = useState(false);
   const [percentAdded, setPercentAdded] = useState(null);
 
+  // Shows the same break-adjusted time that will actually get logged when
+  // this session stops (see effectiveElapsedMs) — so a technician working
+  // through 9:15–9:30, 11:00–11:30, or 3:15–3:30 sees the clock hold rather
+  // than getting a number here that doesn't match their logged hours later.
   useEffect(() => {
     if (!session.active || !session.startedAt) return;
-    const tick = () => setElapsed(Date.now() - session.startedAt);
+    const tick = () => setElapsed(effectiveElapsedMs(session.startedAt, Date.now()));
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
