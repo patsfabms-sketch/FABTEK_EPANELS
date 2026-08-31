@@ -17,6 +17,7 @@ import {
   computeEmployeeLeaderboard,
   computeRepeatBuildTrends,
   computeCostSummary,
+  computeNonProductiveSummary,
 } from "../../data/mockData";
 import { Card, SectionTitle, StatCard, RoleBadge, Button, formatNumber, formatCurrency } from "../../components/ui";
 
@@ -123,6 +124,16 @@ export default function Reports() {
     }));
     return [...withAttainment].sort((a, b) => (b[sortBy] ?? 0) - (a[sortBy] ?? 0));
   }, [leaderboard, filteredEmployees, sortBy]);
+
+  // Non-productive time — Panel Technicians only (see the note on
+  // TECH_SHIFT_WINDOW in mockData.js); reuses this same filteredHistory /
+  // filteredEmployees pair, so it automatically respects the range, role,
+  // and employee filters above just like every other KPI on this page.
+  const nonProductive = useMemo(
+    () => computeNonProductiveSummary(filteredHistory, filteredEmployees),
+    [filteredHistory, filteredEmployees]
+  );
+  const maxNonProductiveHours = Math.max(...nonProductive.perEmployee.map((r) => r.totalNonProductiveHours), 1);
 
   // Repeat-build learning-curve view and the cost/margin summary are both
   // deliberately all-time (not range-filtered) — a build-to-build trend or
@@ -311,6 +322,68 @@ export default function Reports() {
             ))}
           </tbody>
         </table>
+      </Card>
+
+      <SectionTitle
+        title="Non-Productive Time"
+        subtitle="Panel Technicians only — time inside the 7:00am–4:30pm shift not covered by a logged session (paid breaks already excluded), sorted highest first"
+      />
+      <div className="flex flex-wrap gap-4 mb-4">
+        <StatCard
+          label="Total Non-Productive"
+          value={`${formatNumber(nonProductive.totalNonProductiveHours)} hrs`}
+          sub={`${nonProductive.nonProductivePct}% of tracked shift time · ${range.label}`}
+          accent={nonProductive.nonProductivePct > 25 ? "text-bad-600" : nonProductive.nonProductivePct > 10 ? "text-warn-600" : "text-good-600"}
+        />
+        <StatCard label="Shift Capacity Tracked" value={`${formatNumber(nonProductive.totalCapacityHours)} hrs`} sub="Sum across all technicians' tracked workdays" />
+      </div>
+      <Card padded={false} className="overflow-x-auto mb-8">
+        {nonProductive.perEmployee.length === 0 ? (
+          <p className="text-xs text-ink-400 text-center py-8">
+            No tracked workdays for Panel Technicians in this range — shows up once at least one session is logged
+            on a given day.
+          </p>
+        ) : (
+          <>
+            <table className="w-full text-[13px]">
+              <thead>
+                <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
+                  <th className="px-4 py-3 font-semibold">Technician</th>
+                  <th className="px-4 py-3 font-semibold">Workdays Tracked</th>
+                  <th className="px-4 py-3 font-semibold">Logged Hours</th>
+                  <th className="px-4 py-3 font-semibold">Non-Productive Hours</th>
+                  <th className="px-4 py-3 font-semibold">% of Shift</th>
+                </tr>
+              </thead>
+              <tbody>
+                {nonProductive.perEmployee.map((r, i) => (
+                  <tr key={r.employeeId} className={`border-b border-paper-100 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
+                    <td className="px-4 py-2.5 font-medium text-ink-900">{r.name}</td>
+                    <td className="px-4 py-2.5 text-ink-700">{r.daysTracked}</td>
+                    <td className="px-4 py-2.5 text-ink-700">{r.totalLoggedHours}</td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-ink-900 font-semibold w-12 shrink-0">{r.totalNonProductiveHours}</span>
+                        <div className="h-2 rounded-full bg-paper-100 overflow-hidden flex-1 max-w-[140px]">
+                          <div
+                            className="h-full rounded-full bg-warn-500"
+                            style={{ width: `${(r.totalNonProductiveHours / maxNonProductiveHours) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5 text-ink-700">{r.nonProductivePct}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="text-[11px] text-ink-400 px-4 py-3 border-t border-paper-100">
+              Only workdays with at least one logged session count toward these totals — a day with none isn't
+              assumed to be idle, since this app has no separate clock-in signal to confirm someone was even at
+              work that day (a day off would otherwise look identical to sitting idle all shift).
+            </p>
+          </>
+        )}
       </Card>
 
       {repeatBuilds.length > 0 && (

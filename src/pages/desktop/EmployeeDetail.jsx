@@ -1,7 +1,14 @@
 import { useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
-import { computeStageStats, attainmentTone, productionStages, CONNECT_STAGE_LABEL } from "../../data/mockData";
+import {
+  computeStageStats,
+  attainmentTone,
+  productionStages,
+  CONNECT_STAGE_LABEL,
+  computeNonProductiveTime,
+  ROLES,
+} from "../../data/mockData";
 import { Card, SectionTitle, StatCard, RoleBadge, Modal, Button } from "../../components/ui";
 
 const TONE_ACCENT = {
@@ -36,6 +43,23 @@ export default function EmployeeDetail() {
   const maxSessions = Math.max(...breakdown.map((b) => b.sessions), 1);
   const totalSessions = breakdown.reduce((s, b) => s + b.sessions, 0);
   const totalHours = Number(breakdown.reduce((s, b) => s + b.hours, 0).toFixed(1));
+
+  // Non-productive time — how much of this Panel Technician's fixed
+  // 7:00am–4:30pm shift wasn't covered by a logged session, day by day. See
+  // computeNonProductiveTime's own comment in mockData.js for why days with
+  // zero logged sessions (a day off, before they were hired, etc.) are left
+  // out rather than counted as a full idle shift. Leads aren't on this fixed
+  // shift window, so the section is skipped for them entirely.
+  const nonProductiveDays = useMemo(
+    () => (employee?.role === ROLES.TECH ? computeNonProductiveTime(workHistory, employee.id) : []),
+    [employee, workHistory]
+  );
+  const recentNonProductiveDays = nonProductiveDays.slice(0, 7);
+  const recentNonProductiveTotal = Number(recentNonProductiveDays.reduce((s, d) => s + d.nonProductiveHours, 0).toFixed(1));
+  const recentCapacityTotal = Number(recentNonProductiveDays.reduce((s, d) => s + d.capacityHours, 0).toFixed(1));
+  const recentNonProductivePct =
+    recentCapacityTotal > 0 ? Math.round((recentNonProductiveTotal / recentCapacityTotal) * 100) : 0;
+  const maxNonProductiveHours = Math.max(...recentNonProductiveDays.map((d) => d.nonProductiveHours), 1);
 
   if (!employee) {
     return (
@@ -119,6 +143,56 @@ export default function EmployeeDetail() {
           ))}
         </div>
       </Card>
+
+      {employee.role === ROLES.TECH && (
+        <>
+          <SectionTitle
+            title="Non-Productive Time"
+            subtitle="Time inside the 7:00am–4:30pm shift not covered by a logged session (paid breaks already excluded) — last 7 tracked workdays"
+          />
+          <Card className="mb-8">
+            {recentNonProductiveDays.length === 0 ? (
+              <p className="text-xs text-ink-400 text-center py-6">
+                No tracked workdays yet — this shows up once at least one session has been logged on a given day.
+              </p>
+            ) : (
+              <>
+                <div className="flex flex-wrap gap-4 mb-5">
+                  <StatCard
+                    label="Non-Productive"
+                    value={`${recentNonProductiveTotal} hrs`}
+                    sub={`${recentNonProductivePct}% of shift time`}
+                    accent={recentNonProductivePct > 25 ? "text-bad-600" : recentNonProductivePct > 10 ? "text-warn-600" : "text-good-600"}
+                  />
+                  <StatCard label="Shift Capacity" value={`${recentCapacityTotal} hrs`} sub={`${recentNonProductiveDays.length} workday(s) tracked`} />
+                </div>
+                <div className="space-y-3.5">
+                  {recentNonProductiveDays.map((d) => (
+                    <div key={d.dayKey}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[13px] font-medium text-ink-900">{d.label}</span>
+                        <span className="text-[11px] text-ink-500">
+                          {d.nonProductiveHours} hrs non-productive · {d.loggedHours} hrs logged of {d.capacityHours} hrs shift
+                        </span>
+                      </div>
+                      <div className="h-2 rounded-full bg-paper-100 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-warn-500"
+                          style={{ width: `${(d.nonProductiveHours / maxNonProductiveHours) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[11px] text-ink-400 mt-4 pt-3 border-t border-paper-100">
+                  Only days with at least one logged session are shown — a day with no sessions could mean they
+                  weren't scheduled to work rather than idle all day, so it's left out instead of guessed at.
+                </p>
+              </>
+            )}
+          </Card>
+        </>
+      )}
 
       <SectionTitle title="Recent Activity" subtitle="Logged sessions from the technician app" />
       <Card padded={false} className="overflow-x-auto">

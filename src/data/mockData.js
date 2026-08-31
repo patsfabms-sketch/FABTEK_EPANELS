@@ -238,6 +238,118 @@ export function effectiveElapsedMs(startedAt, endedAt) {
   return Math.max(0, raw - breakOverlapMs(startedAt, endedAt));
 }
 
+// ---------------------------------------------------------------------------
+// Non-productive time — every minute of a Panel Technician's scheduled shift
+// that ISN'T covered by a logged production session (and isn't already a
+// paid break — see BREAK_WINDOWS above). This is entirely DERIVED from
+// workHistory; there's no separate clock-in feature and no new action for a
+// technician to take, so "how much of today wasn't spent on a task" is
+// computed after the fact from the same session data everything else here
+// already uses.
+//
+// Scoped to Panel Technicians only (ROLES.TECH) — this fixed 7:00am–4:30pm
+// shift window is what Pat gave us for that role specifically. Lead Panel
+// Technicians have a different daily-hours target (7 vs 8 — see
+// initialRoleDefaults) and no fixed shift window was specified for them, so
+// they're left out of this for now rather than guessing their hours.
+export const TECH_SHIFT_WINDOW = { startMinute: 7 * 60, endMinute: 16 * 60 + 30 }; // 7:00 am – 4:30 pm
+
+// Local calendar-day key ("2026-08-31") for an ISO timestamp, or null if the
+// timestamp is missing/unparseable. workHistory rows are bucketed to a day
+// by `createdAt` (the real DB-assigned timestamp), not the `date` display
+// string, since `date` has no year in it — same reasoning as the trend
+// charts (see fromDbWorkHistory's comment on createdAt).
+function dayKeyFor(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Per-day non-productive breakdown for one technician, most recent day
+// first: [{ dayKey, label, loggedHours, capacityHours, nonProductiveHours }].
+//
+// IMPORTANT LIMITATION: only days with at least one workHistory row for this
+// employee are included. There's no attendance/clock-in signal anywhere in
+// this app, so a day with zero logged sessions is indistinguishable between
+// "sat around all day" and "day off / sick / not yet hired" — rather than
+// guess, that day is simply left out of the result instead of being counted
+// as a full 8.5-hour idle shift, which would misrepresent absences as
+// non-productive time. A day that DOES have logged work still gets its full
+// non-productive gap computed correctly, including before the first session
+// of the day and after the last.
+export function computeNonProductiveTime(workHistory, employeeId, { now = Date.now() } = {}) {
+  const byDay = new Map();
+  workHistory.forEach((h) => {
+    if (h.employeeId !== employeeId) return;
+    const key = dayKeyFor(h.createdAt);
+    if (!key) return; // no reliable timestamp — can't bucket this row to a day
+    if (!byDay.has(key)) byDay.set(key, { loggedMs: 0, sampleDate: new Date(h.createdAt) });
+    byDay.get(key).loggedMs += (h.hours || 0) * 3600000;
+  });
+
+  const todayKey = dayKeyFor(new Date(now).toISOString());
+
+  const results = [...byDay.entries()].map(([key, { loggedMs, sampleDate }]) => {
+    const dayStart = new Date(sampleDate);
+    dayStart.setHours(0, 0, 0, 0);
+    const shiftStart = dayStart.getTime() + TECH_SHIFT_WINDOW.startMinute * 60000;
+    const shiftEndFull = dayStart.getTime() + TECH_SHIFT_WINDOW.endMinute * 60000;
+    // For today specifically, cap capacity at "now" — otherwise someone
+    // checking at 9am would see hours of "non-productive time" for the part
+    // of the shift that hasn't even happened yet.
+    const shiftEnd = key === todayKey ? Math.min(shiftEndFull, now) : shiftEndFull;
+    const capacityMs = shiftEnd > shiftStart ? effectiveElapsedMs(shiftStart, shiftEnd) : 0;
+    const nonProductiveMs = Math.max(0, capacityMs - loggedMs);
+    return {
+      dayKey: key,
+      label: dayStart.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
+      loggedHours: Number((loggedMs / 3600000).toFixed(1)),
+      capacityHours: Number((capacityMs / 3600000).toFixed(1)),
+      nonProductiveHours: Number((nonProductiveMs / 3600000).toFixed(1)),
+    };
+  });
+
+  return results.sort((a, b) => (a.dayKey < b.dayKey ? 1 : -1));
+}
+
+// Shop-wide roll-up across every Panel Technician in `employees` (Leads are
+// skipped — see the note on TECH_SHIFT_WINDOW), for the Analytics page.
+// `workHistory` is expected to already be whatever range/role/employee
+// filter the page has applied — same pattern as every other Reports.jsx
+// computation, so this automatically respects the page's date-range picker.
+// Sorted by most non-productive hours first, so the technicians it's most
+// worth asking about float to the top.
+export function computeNonProductiveSummary(workHistory, employees) {
+  const perEmployee = employees
+    .filter((e) => e.role === ROLES.TECH)
+    .map((emp) => {
+      const days = computeNonProductiveTime(workHistory, emp.id);
+      const totalLoggedHours = Number(days.reduce((s, d) => s + d.loggedHours, 0).toFixed(1));
+      const totalCapacityHours = Number(days.reduce((s, d) => s + d.capacityHours, 0).toFixed(1));
+      const totalNonProductiveHours = Number(days.reduce((s, d) => s + d.nonProductiveHours, 0).toFixed(1));
+      return {
+        employeeId: emp.id,
+        name: emp.name,
+        daysTracked: days.length,
+        totalLoggedHours,
+        totalCapacityHours,
+        totalNonProductiveHours,
+        nonProductivePct: totalCapacityHours > 0 ? Math.round((totalNonProductiveHours / totalCapacityHours) * 100) : 0,
+      };
+    })
+    .sort((a, b) => b.totalNonProductiveHours - a.totalNonProductiveHours);
+
+  const totalNonProductiveHours = Number(perEmployee.reduce((s, e) => s + e.totalNonProductiveHours, 0).toFixed(1));
+  const totalCapacityHours = Number(perEmployee.reduce((s, e) => s + e.totalCapacityHours, 0).toFixed(1));
+  return {
+    perEmployee,
+    totalNonProductiveHours,
+    totalCapacityHours,
+    nonProductivePct: totalCapacityHours > 0 ? Math.round((totalNonProductiveHours / totalCapacityHours) * 100) : 0,
+  };
+}
+
 // The string encoded into a panel's printed QR code. Kept as a single,
 // namespaced convention (rather than the bare panel id) so a future real
 // camera-scan implementation on the mobile app can reliably recognize an
