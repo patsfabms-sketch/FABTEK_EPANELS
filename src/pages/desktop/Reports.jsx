@@ -18,6 +18,10 @@ import {
   computeRepeatBuildTrends,
   computeCostSummary,
   computeNonProductiveSummary,
+  computeAvgBuildTime,
+  estimateBuildHours,
+  productionStages,
+  CONNECT_STAGE_KEY,
 } from "../../data/mockData";
 import { Card, SectionTitle, StatCard, RoleBadge, Button, Modal, formatNumber, formatCurrency, formatTimeRange } from "../../components/ui";
 
@@ -145,6 +149,43 @@ export default function Reports() {
   // a job's total labor cost doesn't mean much sliced to "the last 7 days."
   const repeatBuilds = useMemo(() => computeRepeatBuildTrends(panels, workHistory), [panels, workHistory]);
   const costSummary = useMemo(() => computeCostSummary(panels, workHistory, employees), [panels, workHistory, employees]);
+
+  // Start-to-finish build-time projections and the build-time calculator
+  // below both deliberately use ALL logged history, not filteredHistory —
+  // same reasoning as repeatBuilds/costSummary just above: a staffing/
+  // scheduling projection should be a stable, all-time average, not
+  // something that jumps around depending on whatever date range happens
+  // to be selected on the page right now.
+  const avgBuildTime = useMemo(() => computeAvgBuildTime(panels, workHistory), [panels, workHistory]);
+  const allTimeStageStats = useMemo(() => computeTeamStageStats(workHistory), [workHistory]);
+  const [showBuildTimeDetail, setShowBuildTimeDetail] = useState(false);
+  // Which stages a hypothetical panel's routing includes, for the "Estimate
+  // a New Panel" calculator — defaults to the stages every normal panel
+  // goes through; the situational/exception ones (Rework, the two Aux
+  // stages, Agastat sub-assembly, Training) start unchecked since they only
+  // apply to some jobs, and the admin knows better than any default whether
+  // this particular hypothetical panel needs them.
+  const CORE_ROUTING_KEYS = ["prep", "verify", "sort", "build", "connect", "test", "ship"];
+  const [routingKeys, setRoutingKeys] = useState(() => new Set(CORE_ROUTING_KEYS));
+  const [estimateConnections, setEstimateConnections] = useState("");
+  const buildEstimate = useMemo(
+    () =>
+      estimateBuildHours(
+        allTimeStageStats,
+        productionStages.filter((s) => routingKeys.has(s.key)).map((s) => s.key),
+        estimateConnections,
+        avgBuildTime.hoursPerConnection
+      ),
+    [allTimeStageStats, routingKeys, estimateConnections, avgBuildTime.hoursPerConnection]
+  );
+  function toggleRoutingStage(key) {
+    setRoutingKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   function exportCsv() {
     const rows = [
@@ -297,6 +338,113 @@ export default function Reports() {
           panels={panels}
           rangeLabel={range.label}
           onClose={() => setOpenStageKey(null)}
+        />
+      )}
+
+      <SectionTitle
+        title="Panel Build Time & Projections"
+        subtitle="Start-to-finish totals across every shipped panel — all-time, not affected by the filters above — for staffing and scheduling projections"
+      />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-8">
+        <Card>
+          <div className="flex flex-wrap gap-4 mb-1">
+            <button
+              onClick={() => avgBuildTime.completedBuilds > 0 && setShowBuildTimeDetail(true)}
+              disabled={avgBuildTime.completedBuilds === 0}
+              className="text-left disabled:cursor-default"
+            >
+              <p className="text-[11px] font-semibold text-ink-500">Shipped Panels</p>
+              <p className={`text-xl font-bold mt-0.5 ${avgBuildTime.completedBuilds > 0 ? "text-brand-600 hover:text-brand-700" : "text-ink-900"}`}>
+                {avgBuildTime.completedBuilds}
+              </p>
+              {avgBuildTime.completedBuilds > 0 && (
+                <p className="text-[10px] font-semibold text-brand-600">See panels →</p>
+              )}
+            </button>
+            <div>
+              <p className="text-[11px] font-semibold text-ink-500">Avg Hours / Panel</p>
+              <p className="text-xl font-bold text-ink-900 mt-0.5">{avgBuildTime.avgHoursPerBuild}</p>
+            </div>
+            <div>
+              <p className="text-[11px] font-semibold text-ink-500">Median Hours / Panel</p>
+              <p className="text-xl font-bold text-ink-900 mt-0.5">{avgBuildTime.medianHoursPerBuild}</p>
+            </div>
+            <div>
+              <p className="text-[11px] font-semibold text-ink-500">Hrs / Connection</p>
+              <p className="text-xl font-bold text-ink-900 mt-0.5">{avgBuildTime.hoursPerConnection ?? "—"}</p>
+            </div>
+          </div>
+          <p className="text-[11px] text-ink-400 mt-3 pt-3 border-t border-paper-100">
+            {avgBuildTime.completedBuilds === 0
+              ? "No panel has a completed QC/Wrap entry on file yet — projections need at least one fully shipped panel to compute from."
+              : `"Avg Hours / Panel" sums every hour logged against a shipped panel across every stage it went through, then averages across all ${avgBuildTime.completedBuilds} shipped panel${avgBuildTime.completedBuilds === 1 ? "" : "s"} on file. Median is included alongside it since one unusually long or short build can pull the average around. "Hrs / Connection" is Route/Terminate hours only, divided by connections — the rate the calculator below uses.`}
+          </p>
+        </Card>
+
+        <Card>
+          <p className="text-[13px] font-bold text-ink-900 mb-0.5">Estimate a New Panel</p>
+          <p className="text-[11px] text-ink-500 mb-3">
+            Check the stages this panel's routing will actually go through, enter its estimated connection count, and
+            get a projected total build time.
+          </p>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 mb-3">
+            {productionStages.map((s) => (
+              <label key={s.key} className="flex items-center gap-1.5 text-[12px] text-ink-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={routingKeys.has(s.key)}
+                  onChange={() => toggleRoutingStage(s.key)}
+                />
+                {s.label}
+                {s.key === CONNECT_STAGE_KEY && <span className="text-[10px] text-brand-600 font-semibold">(rate-based)</span>}
+              </label>
+            ))}
+          </div>
+          <label className="text-xs font-semibold text-ink-500">Estimated Connections</label>
+          <input
+            type="number"
+            min="0"
+            step="1"
+            value={estimateConnections}
+            onChange={(e) => setEstimateConnections(e.target.value)}
+            placeholder="e.g. 240"
+            className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
+          />
+
+          <div className="rounded-lg bg-brand-50 border border-brand-100 px-3 py-3 mb-2">
+            <p className="text-[11px] font-semibold text-brand-700">Estimated Build Time</p>
+            <p className="text-2xl font-bold text-brand-700">{buildEstimate.totalHours} hrs</p>
+          </div>
+          {buildEstimate.breakdown.length === 0 ? (
+            <p className="text-[11px] text-ink-400">Check at least one stage above to see an estimate.</p>
+          ) : (
+            <div className="space-y-1">
+              {buildEstimate.breakdown.map((b) => {
+                const stage = productionStages.find((s) => s.key === b.key);
+                return (
+                  <div key={b.key} className="flex items-center justify-between text-[11px] text-ink-600">
+                    <span>{stage?.label ?? b.key}</span>
+                    <span className="text-ink-500">
+                      <span className="font-semibold text-ink-900">{b.hours}</span> hrs · {b.basis}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {avgBuildTime.hoursPerConnection === null && routingKeys.has(CONNECT_STAGE_KEY) && (
+            <p className="text-[11px] text-warn-600 mt-2">
+              No shipped Route/Terminate history yet to compute a connections rate from — Route/Terminate above is
+              falling back to its shop-wide average session length instead of a connection-based estimate.
+            </p>
+          )}
+        </Card>
+      </div>
+
+      {showBuildTimeDetail && (
+        <BuildTimeDetailModal
+          builds={avgBuildTime.builds}
+          onClose={() => setShowBuildTimeDetail(false)}
         />
       )}
 
@@ -575,6 +723,68 @@ function StageDetailModal({ stage, rows, employees, panels, rangeLabel, onClose 
                       {h.status}
                     </span>
                   </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Modal>
+  );
+}
+
+// Drill-down behind the "Shipped Panels" stat in the build-time projection
+// card — every panel that has a completed QC/Wrap entry on file, with its
+// real total hours and connections, so "how did we get an average of X
+// hours per panel" always has a real answer one click away, same
+// philosophy as StageDetailModal above.
+function BuildTimeDetailModal({ builds, onClose }) {
+  return (
+    <Modal onClose={onClose} widthClass="max-w-2xl">
+      <div className="flex items-start justify-between mb-1">
+        <div>
+          <h3 className="text-base font-bold text-ink-900">Shipped Panels — Build Time Detail</h3>
+          <p className="text-[11px] text-ink-500 mt-0.5">
+            Every panel with a completed QC/Wrap entry on file, all-time · sorted by total hours
+          </p>
+        </div>
+        <button onClick={onClose} aria-label="Close" className="text-ink-400 hover:text-ink-700 text-xl leading-none px-1">
+          ×
+        </button>
+      </div>
+      <p className="text-[11px] text-ink-400 mb-4">
+        This is exactly what "Avg Hours / Panel" and "Hrs / Connection" on the card are computed from — every hour
+        logged against each panel, across every stage it went through.
+      </p>
+      <div className="rounded-lg border border-paper-200 overflow-x-auto max-h-[60vh] overflow-y-auto">
+        <table className="w-full text-[13px]">
+          <thead className="sticky top-0 bg-white">
+            <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
+              <th className="px-3 py-2.5 font-semibold">Panel</th>
+              <th className="px-3 py-2.5 font-semibold">Customer</th>
+              <th className="px-3 py-2.5 font-semibold text-right">Hours</th>
+              <th className="px-3 py-2.5 font-semibold text-right">Connections</th>
+              <th className="px-3 py-2.5 font-semibold text-right">Sessions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {builds.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-3 py-8 text-center text-xs text-ink-400">
+                  No shipped panels yet.
+                </td>
+              </tr>
+            ) : (
+              builds.map((b, i) => (
+                <tr key={b.buildId} className={`border-b border-paper-50 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
+                  <td className="px-3 py-2 text-ink-900 font-medium">
+                    #{b.id}
+                    {b.jobNumber && <span className="text-ink-400"> · Job #{b.jobNumber}</span>}
+                  </td>
+                  <td className="px-3 py-2 text-ink-600">{b.customer || "—"}</td>
+                  <td className="px-3 py-2 text-right text-ink-700">{b.hours}</td>
+                  <td className="px-3 py-2 text-right text-ink-700">{b.connections || "—"}</td>
+                  <td className="px-3 py-2 text-right text-ink-700">{b.sessions}</td>
                 </tr>
               ))
             )}

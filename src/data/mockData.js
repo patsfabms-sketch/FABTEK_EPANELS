@@ -484,6 +484,13 @@ export const productionStages = [
 export const CONNECT_STAGE_KEY = "connect";
 export const CONNECT_STAGE_LABEL = productionStages.find((s) => s.key === CONNECT_STAGE_KEY)?.label;
 
+// Key of the "QC/Wrap" stage — the last step in a normal routing, so a
+// build having a *completed* workHistory row here is this app's definition
+// of "this panel actually shipped" (same signal Reports.jsx's "Panels
+// Shipped" stat and computeAvgBuildTime below both key off of).
+export const SHIP_STAGE_KEY = "ship";
+export const SHIP_STAGE_LABEL = productionStages.find((s) => s.key === SHIP_STAGE_KEY)?.label;
+
 function stageStatsFromRows(rows, stage) {
   const stageRows = rows.filter((h) => h.stage === stage.label);
   if (stageRows.length === 0) return null;
@@ -521,6 +528,117 @@ export function computeStageStats(workHistory, employeeId) {
 // where the process is actually spending its time, i.e. the bottleneck.
 export function computeTeamStageStats(workHistory) {
   return productionStages.map((stage) => stageStatsFromRows(workHistory, stage)).filter(Boolean);
+}
+
+// "Start to finish" build-time projections — for every build that's
+// actually shipped (a QC/Wrap row on file with taskCompleted true, same
+// definition Reports.jsx's "Panels Shipped" stat uses, just checked per
+// build instead of counted across all of them), sums every hour logged
+// against that exact (panel id, buildId) across every stage it went
+// through — Panel Prep through QC/Wrap, plus any Rework/sub-assembly/
+// Training time — the real total labor investment in that one panel, not
+// just one stage of it. Averaged across every shipped build, this answers
+// "how long does a panel really take, start to finish," for staffing and
+// scheduling projections. A build still in progress (no completed QC/Wrap
+// row yet) is excluded — its total would understate a real full build.
+export function computeAvgBuildTime(panels, workHistory) {
+  const shipped = panels
+    .map((panel) => ({ panel, stats: computeBuildStats(workHistory, panel) }))
+    .filter(({ panel }) => {
+      const tag = `#${panel.id}`;
+      return workHistory.some(
+        (h) => h.panel === tag && h.buildId === panel.buildId && h.stage === SHIP_STAGE_LABEL && h.taskCompleted
+      );
+    });
+
+  if (shipped.length === 0) {
+    return {
+      completedBuilds: 0,
+      avgHoursPerBuild: 0,
+      medianHoursPerBuild: 0,
+      avgConnectionsPerBuild: 0,
+      hoursPerConnection: null,
+      builds: [],
+    };
+  }
+
+  const hoursSorted = shipped.map((b) => b.stats.hours).sort((a, b) => a - b);
+  const totalHours = hoursSorted.reduce((s, h) => s + h, 0);
+  const totalConnections = shipped.reduce((s, b) => s + b.stats.connections, 0);
+  const mid = Math.floor(hoursSorted.length / 2);
+  const medianHoursPerBuild =
+    hoursSorted.length % 2 !== 0 ? hoursSorted[mid] : (hoursSorted[mid - 1] + hoursSorted[mid]) / 2;
+
+  // Route/Terminate hours specifically, summed across shipped builds only —
+  // the portion of total build time that actually scales with how many
+  // connections a panel has, unlike prep/sort/build/test/QC time, which
+  // behaves more like a fixed per-panel overhead regardless of size. This
+  // is what powers the connection-aware part of estimateBuildHours below.
+  // Sum-of-hours / sum-of-connections (not a mean of each build's own
+  // ratio) so a small panel's noisier per-build rate doesn't count as much
+  // as a big panel's more stable one.
+  const connectHours = shipped.reduce((sum, { panel }) => {
+    const tag = `#${panel.id}`;
+    const rows = workHistory.filter(
+      (h) => h.panel === tag && h.buildId === panel.buildId && h.stage === CONNECT_STAGE_LABEL
+    );
+    return sum + rows.reduce((s, h) => s + (h.hours || 0), 0);
+  }, 0);
+
+  return {
+    completedBuilds: shipped.length,
+    avgHoursPerBuild: Number((totalHours / shipped.length).toFixed(1)),
+    medianHoursPerBuild: Number(medianHoursPerBuild.toFixed(1)),
+    avgConnectionsPerBuild: Math.round(totalConnections / shipped.length),
+    hoursPerConnection: totalConnections > 0 ? Number((connectHours / totalConnections).toFixed(3)) : null,
+    builds: shipped
+      .map(({ panel, stats }) => ({
+        buildId: panel.buildId,
+        id: panel.id,
+        jobNumber: panel.jobNumber,
+        customer: panel.customer,
+        hours: stats.hours,
+        connections: stats.connections,
+        sessions: stats.sessions,
+      }))
+      .sort((a, b) => b.hours - a.hours),
+  };
+}
+
+// Powers the "Estimate a New Panel" calculator on Reports.jsx: given which
+// stages a hypothetical panel's routing will actually go through and how
+// many connections it's expected to need, projects total build hours.
+// Every selected stage contributes its own historical avgHours from
+// stageStats (computeTeamStageStats) EXCEPT Route/Terminate, which uses
+// hoursPerConnection × estimatedConnections instead whenever that rate is
+// available — a flat avgHours for Route/Terminate would be wrong for
+// anything but an average-sized panel, since terminating time is driven by
+// how many connections there actually are, not by "how long a
+// Route/Terminate session usually runs" shopwide. Pure function — no
+// dependency on live app state — so it's easy to test and to preview
+// changes to instantly in the UI as the admin adjusts the inputs.
+export function estimateBuildHours(stageStats, selectedStageKeys, estimatedConnections, hoursPerConnection) {
+  const statsByKey = new Map(stageStats.map((s) => [s.key, s]));
+  const conns = Math.max(0, Number(estimatedConnections) || 0);
+  const breakdown = selectedStageKeys.map((key) => {
+    const stat = statsByKey.get(key);
+    if (key === CONNECT_STAGE_KEY && hoursPerConnection !== null && conns > 0) {
+      return {
+        key,
+        hours: Number((hoursPerConnection * conns).toFixed(1)),
+        method: "rate",
+        basis: `${hoursPerConnection} hrs/connection × ${conns} connections`,
+      };
+    }
+    return {
+      key,
+      hours: stat?.avgHours ?? 0,
+      method: "average",
+      basis: stat ? `avg of ${stat.sessions} logged session${stat.sessions === 1 ? "" : "s"}` : "no history logged yet",
+    };
+  });
+  const totalHours = Number(breakdown.reduce((s, b) => s + b.hours, 0).toFixed(1));
+  return { totalHours, breakdown };
 }
 
 // One row per employee with team-wide comparable KPIs — the "how does
