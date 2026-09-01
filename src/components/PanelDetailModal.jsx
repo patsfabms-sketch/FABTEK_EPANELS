@@ -30,9 +30,20 @@ const SIZE_PRESETS = [
 const PAGE_USABLE_WIDTH_IN = 8;
 const PAGE_USABLE_HEIGHT_IN = 10.5;
 const GAP_IN = 0.15;
-// Two lines now (Job #/Panel # and Description), not one — see the
-// qr-sticker markup in PrintQrModal.
-const LABEL_HEIGHT_IN = 0.34;
+// Three lines now (Job #/Panel #, Description, and the SN# serial-number
+// line — always printed, blank as "SN#__________" when not on file) — see
+// the qr-sticker markup in PrintQrModal.
+const LABEL_HEIGHT_IN = 0.46;
+
+// The serial-number line every printed or downloaded QR sticker carries —
+// see EditPanelModal's Serial Number field below. Printed even when the
+// field is blank, as a fill-in line ("SN#__________") a technician can
+// write the real serial on by hand once it's known — Pat's explicit
+// request was that a blank serial number still show up on the printout as
+// a line to fill in, not be silently omitted.
+function serialNumberLine(panel) {
+  return `SN#${(panel.serialNumber || "").trim() || "__________"}`;
+}
 
 function formatElapsed(startedAt, now) {
   const mins = Math.max(0, Math.round((now - startedAt) / 60000));
@@ -132,6 +143,11 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
           label="PO Number"
           value={panel.poNumber || "Not on file — click Edit to add"}
           muted={!panel.poNumber}
+        />
+        <DetailField
+          label="Serial Number"
+          value={panel.serialNumber || "Not on file — click Edit to add"}
+          muted={!panel.serialNumber}
         />
         <DetailField label="Description" value={panel.order || "—"} />
       </div>
@@ -381,6 +397,7 @@ function EditPanelModal({ panel, onClose, onDeleted }) {
   const [customer, setCustomer] = useState(panel.customer || "");
   const [jobNumber, setJobNumber] = useState(panel.jobNumber || "");
   const [poNumber, setPoNumber] = useState(panel.poNumber || "");
+  const [serialNumber, setSerialNumber] = useState(panel.serialNumber || "");
   const [description, setDescription] = useState(panel.order || "");
   const [dateAdded, setDateAdded] = useState(panel.dateAdded || "");
   const [price, setPrice] = useState(String(panel.price ?? ""));
@@ -397,6 +414,7 @@ function EditPanelModal({ panel, onClose, onDeleted }) {
       customer: customer.trim() || "Unknown Customer",
       jobNumber: jobNumber.trim(),
       poNumber: poNumber.trim(),
+      serialNumber: serialNumber.trim(),
       order: description.trim(),
       dateAdded: dateAdded || panel.dateAdded,
       price: Number.isFinite(priceNum) && priceNum >= 0 ? priceNum : panel.price,
@@ -465,6 +483,18 @@ function EditPanelModal({ panel, onClose, onDeleted }) {
         placeholder="Not on the estimate — enter it here"
         className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
       />
+
+      <label className="text-xs font-semibold text-ink-500">Serial Number</label>
+      <input
+        value={serialNumber}
+        onChange={(e) => setSerialNumber(e.target.value)}
+        placeholder="Not assigned yet — leave blank to print SN#____ on the QR"
+        className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
+      />
+      <p className="text-[11px] text-ink-500 -mt-2 mb-3">
+        Printed on the QR sticker as "SN#{serialNumber.trim() || "__________"}" — leave blank and it prints as a
+        blank line to write in by hand.
+      </p>
 
       <label className="text-xs font-semibold text-ink-500">Description</label>
       <input
@@ -566,8 +596,14 @@ async function composeQrLabel(qrDataUrl, panel) {
   const padding = Math.round(size * 0.05);
   const line1FontPx = Math.round(size * 0.05);
   const line2FontPx = Math.round(size * 0.042);
+  const line3FontPx = Math.round(size * 0.042);
   const lineGap = Math.round(size * 0.02);
-  const textBlockHeight = line1FontPx + lineGap + line2FontPx + padding * 1.5;
+  const line2 = panel.order || panel.customer || "";
+  // The serial-number line always renders (blank prints as "SN#__________"
+  // — see serialNumberLine's comment), so it's always counted in the block
+  // height, unlike line2 which is only present when there's a description.
+  const textBlockHeight =
+    line1FontPx + lineGap + (line2 ? line2FontPx + lineGap : 0) + line3FontPx + padding * 1.5;
 
   const canvas = document.createElement("canvas");
   canvas.width = size;
@@ -587,15 +623,15 @@ async function composeQrLabel(qrDataUrl, panel) {
   ctx.font = `bold ${line1FontPx}px Arial, sans-serif`;
   ctx.fillText(truncateToWidth(ctx, line1, maxTextWidth), size / 2, size + padding / 2);
 
-  const line2 = panel.order || panel.customer || "";
+  let cursorY = size + padding / 2 + line1FontPx + lineGap;
   if (line2) {
     ctx.font = `${line2FontPx}px Arial, sans-serif`;
-    ctx.fillText(
-      truncateToWidth(ctx, line2, maxTextWidth),
-      size / 2,
-      size + padding / 2 + line1FontPx + lineGap
-    );
+    ctx.fillText(truncateToWidth(ctx, line2, maxTextWidth), size / 2, cursorY);
+    cursorY += line2FontPx + lineGap;
   }
+
+  ctx.font = `${line3FontPx}px Arial, sans-serif`;
+  ctx.fillText(truncateToWidth(ctx, serialNumberLine(panel), maxTextWidth), size / 2, cursorY);
 
   return canvas.toDataURL("image/png");
 }
@@ -640,14 +676,23 @@ async function composeQrLabelSvg(panel) {
   const padding = size * 0.05;
   const line1FontPx = size * 0.05;
   const line2FontPx = size * 0.042;
+  const line3FontPx = size * 0.042;
   const lineGap = size * 0.02;
-  const textBlockHeight = line1FontPx + lineGap + line2FontPx + padding * 1.5;
+  const line2 = escapeXml(panel.order || panel.customer || "");
+  // Same rule as composeQrLabel: the serial-number line always renders
+  // (blank prints as "SN#__________"), so it's always counted in the block
+  // height, unlike line2 which only exists when there's a description.
+  const textBlockHeight =
+    line1FontPx + lineGap + (line2 ? line2FontPx + lineGap : 0) + line3FontPx + padding * 1.5;
   const totalHeight = size + textBlockHeight;
 
   const line1 = escapeXml(
     `Job #${panel.jobNumber || "—"}  ·  Panel #${panel.id}${unitLabel(panel) ? `  ·  ${unitLabel(panel)}` : ""}`
   );
-  const line2 = escapeXml(panel.order || panel.customer || "");
+  const line3 = escapeXml(serialNumberLine(panel));
+
+  const line2Y = size + padding / 2 + line1FontPx + lineGap;
+  const line3Y = line2Y + (line2 ? line2FontPx + lineGap : 0);
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${totalHeight}" viewBox="0 0 ${size} ${totalHeight}">
@@ -655,9 +700,10 @@ async function composeQrLabelSvg(panel) {
 <g>${qrInner}</g>
 <text x="${size / 2}" y="${size + padding / 2}" text-anchor="middle" dominant-baseline="hanging" font-family="Arial, sans-serif" font-weight="bold" font-size="${line1FontPx}" fill="#111111">${line1}</text>${
     line2
-      ? `\n<text x="${size / 2}" y="${size + padding / 2 + line1FontPx + lineGap}" text-anchor="middle" dominant-baseline="hanging" font-family="Arial, sans-serif" font-size="${line2FontPx}" fill="#111111">${line2}</text>`
+      ? `\n<text x="${size / 2}" y="${line2Y}" text-anchor="middle" dominant-baseline="hanging" font-family="Arial, sans-serif" font-size="${line2FontPx}" fill="#111111">${line2}</text>`
       : ""
   }
+<text x="${size / 2}" y="${line3Y}" text-anchor="middle" dominant-baseline="hanging" font-family="Arial, sans-serif" font-size="${line3FontPx}" fill="#111111">${line3}</text>
 </svg>`;
 }
 
@@ -874,8 +920,12 @@ function PrintQrModal({ panel, onClose }) {
       {(panel.order || panel.customer) && (
         <p className="text-center text-[11px] text-ink-500 mb-1 truncate">{panel.order || panel.customer}</p>
       )}
+      <p className={`text-center text-[11px] mb-1 ${panel.serialNumber ? "text-ink-500" : "text-ink-400"}`}>
+        {serialNumberLine(panel)}
+      </p>
       <p className="text-center text-[10px] text-ink-400 mb-5">
-        Every sticker printed below includes this Job #, Panel #, and description as text
+        Every sticker printed below includes this Job #, Panel #, description, and serial number line as text
+        {!panel.serialNumber && " — printed as a blank \"SN#__________\" to fill in by hand until it's on file"}
       </p>
 
       <label className="text-xs font-semibold text-ink-500">QR code size</label>
@@ -988,6 +1038,7 @@ function PrintQrModal({ panel, onClose }) {
                   {unitLabel(panel) ? ` · ${unitLabel(panel)}` : ""}
                 </p>
                 {(panel.order || panel.customer) && <p className="qr-line2">{panel.order || panel.customer}</p>}
+                <p className="qr-line3">{serialNumberLine(panel)}</p>
               </div>
             ))}
           </div>,
