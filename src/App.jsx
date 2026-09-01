@@ -8,6 +8,7 @@ import Goals from "./pages/desktop/Goals";
 import Team from "./pages/desktop/Team";
 import Estimates from "./pages/desktop/Estimates";
 import EmployeeDetail from "./pages/desktop/EmployeeDetail";
+import SessionLog from "./pages/desktop/SessionLog";
 import Panels from "./pages/desktop/Panels";
 import GetApp from "./pages/desktop/GetApp";
 import Home from "./pages/mobile/Home";
@@ -28,6 +29,7 @@ export default function App() {
             <Route path="/goals" element={<Goals />} />
             <Route path="/team" element={<Team />} />
             <Route path="/team/:id" element={<EmployeeDetail />} />
+            <Route path="/sessions" element={<SessionLog />} />
             <Route path="/estimates" element={<Estimates />} />
             <Route path="/panels" element={<Panels />} />
             <Route path="/get-app" element={<GetApp />} />
