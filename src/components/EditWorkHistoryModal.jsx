@@ -1,6 +1,12 @@
 import { useMemo, useState } from "react";
 import { useApp } from "../context/AppContext";
-import { productionStages, CONNECT_STAGE_LABEL } from "../data/mockData";
+import {
+  productionStages,
+  CONNECT_STAGE_LABEL,
+  taskProgress,
+  connectionsPerHour,
+  CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD,
+} from "../data/mockData";
 import { Modal, Button } from "./ui";
 
 // Admin-only correction tool for a single logged session — for the
@@ -14,7 +20,7 @@ import { Modal, Button } from "./ui";
 // same fields, same delete confirmation, regardless of where an admin
 // found the entry from.
 export default function EditWorkHistoryModal({ entry, employeeName, onClose }) {
-  const { updateWorkHistoryEntry, deleteWorkHistoryEntry } = useApp();
+  const { updateWorkHistoryEntry, deleteWorkHistoryEntry, workHistory } = useApp();
   const [date, setDate] = useState(entry.date || "");
   const [stage, setStage] = useState(entry.stage || "");
   const [hours, setHours] = useState(String(entry.hours ?? ""));
@@ -32,6 +38,27 @@ export default function EditWorkHistoryModal({ entry, employeeName, onClose }) {
     const labels = productionStages.map((s) => s.label);
     return entry.stage && !labels.includes(entry.stage) ? [entry.stage, ...labels] : labels;
   }, [entry.stage]);
+
+  // How much of this (panel, stage, build) task every OTHER logged session
+  // already accounts for — recomputed against whichever stage is currently
+  // selected, since changing the stage here changes which task this entry's
+  // percentAdded counts against. AppContext.updateWorkHistoryEntry enforces
+  // this same cap on save regardless, but showing it here means the admin
+  // sees the real ceiling instead of being silently capped after the fact.
+  const othersProgress = useMemo(
+    () => taskProgress(workHistory.filter((h) => h.id !== entry.id), entry.panel, stage, entry.buildId),
+    [workHistory, entry.id, entry.panel, entry.buildId, stage]
+  );
+  const maxPercentAdded = Math.max(0, 100 - othersProgress);
+
+  // Live preview of what this entry's connections/hour rate would be with
+  // the values currently typed in — same math AppContext.stopSession uses
+  // to auto-flag a session, shown here so an admin correcting an entry can
+  // see if they're about to enter something that would itself look like an
+  // outlier, even though admin corrections aren't auto-flagged (they're
+  // already a deliberate, reviewed action).
+  const previewRate =
+    stage === CONNECT_STAGE_LABEL ? connectionsPerHour(Number(connectionsCredited), Number(hours)) : null;
 
   function handleSave() {
     const hoursNum = Number(hours);
@@ -123,13 +150,18 @@ export default function EditWorkHistoryModal({ entry, employeeName, onClose }) {
             type="number"
             step="10"
             min="0"
-            max="100"
+            max={maxPercentAdded}
             value={percentAdded}
             onChange={(e) => setPercentAdded(e.target.value)}
             className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
           />
         </div>
       </div>
+      <p className="text-[11px] text-ink-500 -mt-2 mb-3">
+        Up to {maxPercentAdded}% available for this entry
+        {othersProgress > 0 ? ` — every other logged session on this task already totals ${othersProgress}%` : ""}.
+        Saving a higher value gets capped to this automatically.
+      </p>
 
       {stage === CONNECT_STAGE_LABEL && (
         <>
@@ -140,8 +172,20 @@ export default function EditWorkHistoryModal({ entry, employeeName, onClose }) {
             min="0"
             value={connectionsCredited}
             onChange={(e) => setConnectionsCredited(e.target.value)}
-            className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
+            className="mt-1 mb-1 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
           />
+          <p className="text-[11px] text-ink-500 mb-3">
+            {previewRate !== null ? (
+              <span className={previewRate > CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD ? "text-warn-600 font-semibold" : ""}>
+                {previewRate} connections/hr at these values
+                {previewRate > CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD
+                  ? ` — above the ${CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD}/hr review threshold`
+                  : ""}
+              </span>
+            ) : (
+              "Enter hours and connections to see the rate this implies"
+            )}
+          </p>
         </>
       )}
 

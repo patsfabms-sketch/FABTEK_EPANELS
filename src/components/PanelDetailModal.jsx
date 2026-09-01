@@ -11,6 +11,8 @@ import {
   taskProgress,
   unitLabel,
   CONNECT_STAGE_LABEL,
+  connectionsPerHour,
+  CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD,
 } from "../data/mockData";
 import { getPdfBlob } from "../data/pdfStore";
 import { Modal, Button, RoleBadge, formatNumber, formatDate } from "./ui";
@@ -293,13 +295,30 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
 // forward, since a clock-out scan auto-ends any session the technician
 // still has open at that moment using the scan time as the real stop time.
 function EndSessionModal({ activeSession, now, onClose }) {
-  const { adminEndSession, employees } = useApp();
+  const { adminEndSession, employees, workHistory } = useApp();
   const employee = employees.find((e) => e.id === activeSession.employeeId);
   const [hours, setHours] = useState("");
   const [percentAdded, setPercentAdded] = useState("0");
   const [connectionsCredited, setConnectionsCredited] = useState("0");
   const [taskCompleted, setTaskCompleted] = useState(false);
   const rawElapsed = formatElapsed(activeSession.startedAt, now);
+
+  // Same remaining-capacity ceiling the normal Stop Session screen already
+  // enforces — this session started against whatever progress was already
+  // logged, so an admin closing it out from here shouldn't be able to log
+  // more than what's actually left on the task. AppContext.finalizeActiveSession
+  // clamps this on save regardless; showing it here means the admin sees the
+  // real ceiling up front instead of getting silently capped after the fact.
+  const startingProgress = taskProgress(workHistory, activeSession.panel, activeSession.stage, activeSession.buildId);
+  const maxPercentAdded = Math.max(0, 100 - startingProgress);
+
+  // Live preview of what this entry's connections/hour rate would be with
+  // the values currently typed in — same math AppContext.stopSession uses to
+  // auto-flag a session, shown here so an admin closing out a stuck session
+  // can see if the numbers they're entering would themselves look like an
+  // outlier.
+  const previewRate =
+    activeSession.stage === CONNECT_STAGE_LABEL ? connectionsPerHour(Number(connectionsCredited), Number(hours)) : null;
 
   function handleLogAndEnd() {
     adminEndSession(activeSession, {
@@ -347,11 +366,16 @@ function EndSessionModal({ activeSession, now, onClose }) {
         type="number"
         step="10"
         min="0"
-        max="100"
+        max={maxPercentAdded}
         value={percentAdded}
         onChange={(e) => setPercentAdded(e.target.value)}
-        className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
+        className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
       />
+      <p className="text-[11px] text-ink-500 mt-1 mb-3">
+        Up to {maxPercentAdded}% available for this session
+        {startingProgress > 0 ? ` — every other logged session on this task already totals ${startingProgress}%` : ""}.
+        Saving a higher value gets capped to this automatically.
+      </p>
 
       {activeSession.stage === CONNECT_STAGE_LABEL && (
         <>
@@ -362,8 +386,20 @@ function EndSessionModal({ activeSession, now, onClose }) {
             min="0"
             value={connectionsCredited}
             onChange={(e) => setConnectionsCredited(e.target.value)}
-            className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
+            className="mt-1 mb-1 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
           />
+          <p className="text-[11px] text-ink-500 mb-3">
+            {previewRate !== null ? (
+              <span className={previewRate > CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD ? "text-warn-600 font-semibold" : ""}>
+                {previewRate} connections/hr at these values
+                {previewRate > CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD
+                  ? ` — above the ${CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD}/hr review threshold`
+                  : ""}
+              </span>
+            ) : (
+              "Enter hours and connections to see the rate this implies"
+            )}
+          </p>
         </>
       )}
 

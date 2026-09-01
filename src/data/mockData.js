@@ -90,6 +90,29 @@ export function taskProgress(workHistory, panelTag, stage, buildId) {
   return Math.max(0, Math.min(100, total));
 }
 
+// Threshold for auto-flagging a single session's reported connections/hour
+// rate for supervisor review — see AppContext.stopSession. Set from Pat's
+// own top performer ("a little over 60 connections per hour, on paper") as
+// the practical ceiling for one session; anything reported above it is
+// unusual enough to be worth a second look rather than trusted at face
+// value. Exported (not inlined) so Session Log / EmployeeDetail can show
+// the same number the flag was judged against, and so it's a single place
+// to retune if shop performance genuinely changes.
+export const CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD = 60;
+
+// Per-entry connections/hour, or null when there's nothing meaningful to
+// divide (no hours logged, or no connections credited — e.g. a non-connect
+// stage) — used wherever a single session's rate needs to be shown or
+// checked against the review threshold above. Deliberately per-entry, not
+// an average across many sessions like computeEmployeeLeaderboard's
+// connectionsPerHour — a single unusually fast session is exactly what
+// this is meant to catch, even if that technician's overall average looks
+// normal.
+export function connectionsPerHour(connectionsCredited, hours) {
+  if (!connectionsCredited || !hours || hours <= 0) return null;
+  return Number((connectionsCredited / hours).toFixed(1));
+}
+
 // ---------------------------------------------------------------------------
 // Repeat panel builds
 //

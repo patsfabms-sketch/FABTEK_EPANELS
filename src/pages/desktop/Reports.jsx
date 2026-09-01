@@ -19,7 +19,7 @@ import {
   computeCostSummary,
   computeNonProductiveSummary,
 } from "../../data/mockData";
-import { Card, SectionTitle, StatCard, RoleBadge, Button, formatNumber, formatCurrency } from "../../components/ui";
+import { Card, SectionTitle, StatCard, RoleBadge, Button, Modal, formatNumber, formatCurrency } from "../../components/ui";
 
 // Days back from today each range covers — null means no cutoff at all.
 // "Custom" date-range picking isn't implemented; these four cover the
@@ -38,6 +38,7 @@ export default function Reports() {
   const [roleFilter, setRoleFilter] = useState("All Roles");
   const [employeeFilter, setEmployeeFilter] = useState("All Employees");
   const [sortBy, setSortBy] = useState("hours");
+  const [openStageKey, setOpenStageKey] = useState(null);
 
   // "Now" as component state (rather than calling Date.now() directly in
   // the render body) — same pattern used in AdminHome.jsx/PanelDetailModal.jsx.
@@ -110,7 +111,11 @@ export default function Reports() {
     () => [...computeTeamStageStats(filteredHistory)].sort((a, b) => b.hours - a.hours),
     [filteredHistory]
   );
-  const maxStageHours = Math.max(...stageStats.map((s) => s.hours), 1);
+  // Which stage card is currently expanded into its session-level detail —
+  // see StageDetailModal below. Derived from filteredHistory (not a
+  // separately-computed find), so if the range/role/employee filters change
+  // while a stage is open, the modal's rows stay in sync automatically.
+  const openStage = stageStats.find((s) => s.key === openStageKey) ?? null;
 
   // The "how does everyone stack up" comparison table.
   const leaderboard = useMemo(
@@ -255,32 +260,45 @@ export default function Reports() {
       </div>
 
       <SectionTitle
-        title="Time by Build Stage"
-        subtitle="Total shop hours and average time per task at each stage — the biggest bar is where the process is actually spending its time"
+        title="Average Time per Step"
+        subtitle={`Every logged session for each stage, averaged together · ${range.label} — click a step to see exactly which sessions make up that number`}
       />
-      <Card className="mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-8">
         {stageStats.length === 0 ? (
-          <p className="text-xs text-ink-400 text-center py-6">No work logged yet in this range.</p>
+          <p className="text-xs text-ink-400 text-center py-6 col-span-full">No work logged yet in this range.</p>
         ) : (
-          <div className="space-y-3.5">
-            {stageStats.map((s) => (
-              <div key={s.key}>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-[13px] font-medium text-ink-900">{s.label}</span>
-                  <span className="text-[11px] text-ink-500">
-                    {formatNumber(s.hours)} hrs total · avg {s.avgHours} hrs/task · {s.sessions} session{s.sessions === 1 ? "" : "s"} ·{" "}
-                    {s.technicians} tech{s.technicians === 1 ? "" : "s"}
-                    {s.key === "connect" && s.totalConnections > 0 ? ` · ${formatNumber(s.totalConnections)} connections` : ""}
-                  </span>
-                </div>
-                <div className="h-2.5 rounded-full bg-paper-100 overflow-hidden">
-                  <div className="h-full rounded-full bg-brand-500" style={{ width: `${(s.hours / maxStageHours) * 100}%` }} />
-                </div>
-              </div>
-            ))}
-          </div>
+          stageStats.map((s) => (
+            <button
+              key={s.key}
+              onClick={() => setOpenStageKey(s.key)}
+              className="text-left rounded-xl2 bg-white border border-paper-200 shadow-card p-4 hover:border-brand-300 transition-colors"
+            >
+              <p className="text-[13px] font-semibold text-ink-900">{s.label}</p>
+              <p className="mt-1">
+                <span className="text-2xl font-bold text-brand-600">{s.avgHours}</span>{" "}
+                <span className="text-xs font-medium text-ink-500">hrs avg / session</span>
+              </p>
+              <p className="text-[11px] text-ink-500 mt-1.5">
+                {s.sessions} session{s.sessions === 1 ? "" : "s"} · {formatNumber(s.hours)} hrs total ·{" "}
+                {s.technicians} tech{s.technicians === 1 ? "" : "s"}
+                {s.key === "connect" && s.totalConnections > 0 ? ` · ${s.connectionsPerHour} conn/hr avg` : ""}
+              </p>
+              <p className="text-[11px] font-semibold text-brand-600 mt-2.5">See sessions →</p>
+            </button>
+          ))
         )}
-      </Card>
+      </div>
+
+      {openStage && (
+        <StageDetailModal
+          stage={openStage}
+          rows={filteredHistory.filter((h) => h.stage === openStage.label)}
+          employees={employees}
+          panels={panels}
+          rangeLabel={range.label}
+          onClose={() => setOpenStageKey(null)}
+        />
+      )}
 
       <SectionTitle
         title="Employee Performance"
@@ -467,6 +485,100 @@ export default function Reports() {
         </table>
       </Card>
     </div>
+  );
+}
+
+// Drill-down behind an "Average Time per Step" card — every individual
+// logged session that feeds into that stage's average, most recent first,
+// so "where is this number actually coming from" always has a real answer
+// one click away instead of just trusting the summary number. Scoped to
+// whatever range/role/employee filters are active on the page (rows is
+// already filteredHistory sliced to this one stage), so it stays exactly
+// consistent with the card it was opened from.
+function StageDetailModal({ stage, rows, employees, panels, rangeLabel, onClose }) {
+  const employeeById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
+  const jobNumberByBuildId = useMemo(() => new Map(panels.map((p) => [p.buildId, p.jobNumber])), [panels]);
+  const sorted = useMemo(
+    () => [...rows].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()),
+    [rows]
+  );
+  const totalHours = Number(rows.reduce((s, h) => s + (h.hours || 0), 0).toFixed(1));
+  const avgHours = rows.length ? Number((totalHours / rows.length).toFixed(2)) : 0;
+  const isConnectStage = stage.key === "connect";
+
+  return (
+    <Modal onClose={onClose} widthClass="max-w-2xl">
+      <div className="flex items-start justify-between mb-1">
+        <div>
+          <h3 className="text-base font-bold text-ink-900">{stage.label} — Session Detail</h3>
+          <p className="text-[11px] text-ink-500 mt-0.5">
+            {avgHours} hrs avg across {rows.length} session{rows.length === 1 ? "" : "s"} · {rangeLabel}
+          </p>
+        </div>
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="text-ink-400 hover:text-ink-700 text-xl leading-none px-1"
+        >
+          ×
+        </button>
+      </div>
+      <p className="text-[11px] text-ink-400 mb-4">
+        This is exactly what the average on the card is computed from — every individual logged session for this
+        stage in the current range, one row each.
+      </p>
+      <div className="rounded-lg border border-paper-200 overflow-x-auto max-h-[60vh] overflow-y-auto">
+        <table className="w-full text-[13px]">
+          <thead className="sticky top-0 bg-white">
+            <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
+              <th className="px-3 py-2.5 font-semibold">Date</th>
+              <th className="px-3 py-2.5 font-semibold">Technician</th>
+              <th className="px-3 py-2.5 font-semibold">Panel</th>
+              <th className="px-3 py-2.5 font-semibold text-right">Hours</th>
+              {isConnectStage && <th className="px-3 py-2.5 font-semibold text-right">Connections</th>}
+              <th className="px-3 py-2.5 font-semibold">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.length === 0 ? (
+              <tr>
+                <td colSpan={isConnectStage ? 6 : 5} className="px-3 py-8 text-center text-xs text-ink-400">
+                  No sessions in this range.
+                </td>
+              </tr>
+            ) : (
+              sorted.map((h, i) => (
+                <tr key={h.id} className={`border-b border-paper-50 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
+                  <td className="px-3 py-2 text-ink-700">{h.date}</td>
+                  <td className="px-3 py-2 text-ink-900 font-medium">
+                    {employeeById.get(h.employeeId)?.name ?? "Unknown"}
+                  </td>
+                  <td className="px-3 py-2 text-ink-600">
+                    {h.panel}
+                    {jobNumberByBuildId.get(h.buildId) && (
+                      <span className="text-ink-400"> · Job #{jobNumberByBuildId.get(h.buildId)}</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right text-ink-700">{h.hours}</td>
+                  {isConnectStage && (
+                    <td className="px-3 py-2 text-right text-ink-700">{h.connectionsCredited || "—"}</td>
+                  )}
+                  <td className="px-3 py-2">
+                    <span
+                      className={`text-[10px] font-semibold rounded-full px-2 py-0.5 ${
+                        h.status === "Verified" ? "bg-good-50 text-good-600" : "bg-bad-50 text-bad-600"
+                      }`}
+                    >
+                      {h.status}
+                    </span>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Modal>
   );
 }
 

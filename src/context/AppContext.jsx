@@ -9,6 +9,8 @@ import {
   effectiveElapsedMs,
   parseClockQrValue,
   isValidClockWeek,
+  connectionsPerHour,
+  CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD,
 } from "../data/mockData";
 
 const AppContext = createContext(null);
@@ -812,8 +814,28 @@ export function AppProvider({ children }) {
   // flagging an entry for review is itself a manual admin action.
   function updateWorkHistoryEntry(entryId, fields) {
     const before = workHistory.find((h) => h.id === entryId);
-    setWorkHistory((prev) => prev.map((h) => (h.id === entryId ? { ...h, ...fields } : h)));
-    supabase.from("assemblyos_work_history").update(toDbWorkHistoryFields(fields)).eq("id", entryId).then(reportResult);
+    // If the correction includes a new percentAdded, cap it the same way
+    // stopSession caps a technician's own session — this one entry can't be
+    // set to more than 100% minus whatever every OTHER logged session
+    // against the same panel/stage/build already accounts for. Uses the
+    // (possibly also-corrected) stage from `fields` when present, since an
+    // admin can change the stage in the same edit — the cap should apply
+    // against whichever stage the entry ends up filed under, not the one it
+    // started with.
+    let nextFields = fields;
+    if (before && fields.percentAdded !== undefined) {
+      const stageForCap = fields.stage ?? before.stage;
+      const othersProgress = taskProgress(
+        workHistory.filter((h) => h.id !== entryId),
+        before.panel,
+        stageForCap,
+        before.buildId
+      );
+      const cappedPercent = Math.max(0, Math.min(100 - othersProgress, Number(fields.percentAdded) || 0));
+      nextFields = { ...fields, percentAdded: cappedPercent };
+    }
+    setWorkHistory((prev) => prev.map((h) => (h.id === entryId ? { ...h, ...nextFields } : h)));
+    supabase.from("assemblyos_work_history").update(toDbWorkHistoryFields(nextFields)).eq("id", entryId).then(reportResult);
     const emp = employees.find((e) => e.id === before?.employeeId);
     logActivity(
       `corrected a logged session for ${emp?.name ?? "a technician"}`,
@@ -853,6 +875,14 @@ export function AppProvider({ children }) {
     supabase.from("assemblyos_active_sessions").delete().eq("id", activeSession.id).then(reportResult);
     if (discard) return null;
 
+    // Same remaining-capacity cap stopSession applies to a technician's own
+    // session — an admin closing out someone else's stuck/auto-ended
+    // session shouldn't be able to push a task's cumulative progress past
+    // 100% either, even by mistake (e.g. re-entering the full elapsed
+    // session's worth of progress on a task that was already mostly done
+    // by someone else in the meantime).
+    const startingProgress = taskProgress(workHistory, activeSession.panel, activeSession.stage, activeSession.buildId);
+    const cappedPercent = Math.max(0, Math.min(100 - startingProgress, Number(percentAdded) || 0));
     const entry = {
       id: genId("h"),
       employeeId: activeSession.employeeId,
@@ -860,8 +890,8 @@ export function AppProvider({ children }) {
       panel: activeSession.panel,
       stage: activeSession.stage,
       buildId: activeSession.buildId,
-      percentAdded: Math.max(0, Math.min(100, Number(percentAdded) || 0)),
-      taskCompleted: !!taskCompleted,
+      percentAdded: cappedPercent,
+      taskCompleted: !!taskCompleted || startingProgress + cappedPercent >= 100,
       connectionsCredited: Math.max(0, Number(connectionsCredited) || 0),
       panels: 1,
       hours: Math.max(0, Number(hours) || 0),
@@ -1055,6 +1085,14 @@ export function AppProvider({ children }) {
     const isConnectStage = session.stage === CONNECT_STAGE_LABEL;
     const connectionsCredited =
       isConnectStage && session.targetConnections ? Math.round((pct / 100) * session.targetConnections) : 0;
+    const rate = connectionsPerHour(connectionsCredited, hours);
+    // Auto-flag a single session that reports more connections/hour than
+    // the review threshold — see connectionsPerHour's comment in
+    // mockData.js. Every other session still stamps "Verified" at creation
+    // like before; this is the one other place (besides the manual admin
+    // tools) status can come out of stopSession as "Flagged", and it's a
+    // real automatic check rather than a human deciding to flag it.
+    const rateFlagged = rate !== null && rate > CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD;
     const entry = {
       id: genId("h"),
       employeeId: currentUserId,
@@ -1067,7 +1105,7 @@ export function AppProvider({ children }) {
       connectionsCredited,
       panels: 1,
       hours: Math.max(0.1, Number(hours.toFixed(1))),
-      status: "Verified",
+      status: rateFlagged ? "Flagged" : "Verified",
       // Local approximation so this session shows up in analytics trend
       // charts immediately, without waiting on the DB round trip that
       // eventually confirms the real created_at (see fromDbWorkHistory).
@@ -1080,7 +1118,10 @@ export function AppProvider({ children }) {
       (isComplete
         ? `completed ${session.stage.toLowerCase()}`
         : `logged ${pct}% progress on ${session.stage.toLowerCase()} (now ${session.startingProgress + pct}%)`) +
-        (connectionsCredited > 0 ? ` · +${connectionsCredited} connections` : ""),
+        (connectionsCredited > 0 ? ` · +${connectionsCredited} connections` : "") +
+        (rateFlagged
+          ? ` · flagged for review — ${rate} conn/hr exceeds the ${CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD}/hr threshold`
+          : ""),
       `Panel ${session.panel}`,
       { who: currentUser?.name ?? "Technician", kind: isComplete ? "verify" : "scan" }
     );
