@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useApp } from "../../context/AppContext";
+import { formatTimeRange } from "../../components/ui";
 
 const FILTERS = ["This Week", "Last Week", "This Month", "All"];
 
@@ -85,6 +86,7 @@ export default function History() {
               {jobNumberByBuildId.get(h.buildId) ? ` · Job #${jobNumberByBuildId.get(h.buildId)}` : ""}
               {h.stage ? ` · ${h.stage}` : ""}
             </p>
+            <p className="text-[10px] text-ink-400 mt-0.5">{formatTimeRange(h.startedAt, h.endedAt)}</p>
             <div className="flex items-center gap-4 mt-2 text-[11px] text-ink-600">
               <span>
                 <span className="font-semibold text-ink-900">{h.hours}</span> hrs

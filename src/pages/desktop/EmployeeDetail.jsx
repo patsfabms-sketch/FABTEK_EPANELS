@@ -7,7 +7,7 @@ import {
   computeNonProductiveTime,
   ROLES,
 } from "../../data/mockData";
-import { Card, SectionTitle, StatCard, RoleBadge } from "../../components/ui";
+import { Card, SectionTitle, StatCard, RoleBadge, formatTimeRange } from "../../components/ui";
 import EditWorkHistoryModal from "../../components/EditWorkHistoryModal";
 
 const TONE_ACCENT = {
@@ -273,7 +273,10 @@ export default function EmployeeDetail() {
             <tbody>
               {recentActivity.map((h, i) => (
                 <tr key={h.id} className={`border-b border-paper-100 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
-                  <td className="px-4 py-2.5 text-ink-900 font-medium">{h.date}</td>
+                  <td className="px-4 py-2.5 text-ink-900 font-medium">
+                    {h.date}
+                    <div className="text-[10px] text-ink-400 font-normal">{formatTimeRange(h.startedAt, h.endedAt)}</div>
+                  </td>
                   <td className="px-4 py-2.5 text-ink-600">
                     {h.panel}
                     {jobNumberByBuildId.get(h.buildId) && (

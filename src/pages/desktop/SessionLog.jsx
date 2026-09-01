@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
-import { Card, SectionTitle, StatCard, Button } from "../../components/ui";
+import { Card, SectionTitle, StatCard, Button, formatTimeRange } from "../../components/ui";
 import EditWorkHistoryModal from "../../components/EditWorkHistoryModal";
 
 // A single logged session over this many hours gets a visual flag as
@@ -233,7 +233,10 @@ export default function SessionLog() {
                         <span className="text-ink-400">Unknown employee</span>
                       )}
                     </td>
-                    <td className="px-4 py-2.5 text-ink-600">{h.date}</td>
+                    <td className="px-4 py-2.5 text-ink-600">
+                      {h.date}
+                      <div className="text-[10px] text-ink-400">{formatTimeRange(h.startedAt, h.endedAt)}</div>
+                    </td>
                     <td className="px-4 py-2.5 text-ink-600">
                       {h.panel}
                       {jobNumberByBuildId.get(h.buildId) && (

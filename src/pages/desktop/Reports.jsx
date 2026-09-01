@@ -19,7 +19,7 @@ import {
   computeCostSummary,
   computeNonProductiveSummary,
 } from "../../data/mockData";
-import { Card, SectionTitle, StatCard, RoleBadge, Button, Modal, formatNumber, formatCurrency } from "../../components/ui";
+import { Card, SectionTitle, StatCard, RoleBadge, Button, Modal, formatNumber, formatCurrency, formatTimeRange } from "../../components/ui";
 
 // Days back from today each range covers — null means no cutoff at all.
 // "Custom" date-range picking isn't implemented; these four cover the
@@ -549,7 +549,10 @@ function StageDetailModal({ stage, rows, employees, panels, rangeLabel, onClose 
             ) : (
               sorted.map((h, i) => (
                 <tr key={h.id} className={`border-b border-paper-50 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
-                  <td className="px-3 py-2 text-ink-700">{h.date}</td>
+                  <td className="px-3 py-2 text-ink-700">
+                    {h.date}
+                    <div className="text-[10px] text-ink-400">{formatTimeRange(h.startedAt, h.endedAt)}</div>
+                  </td>
                   <td className="px-3 py-2 text-ink-900 font-medium">
                     {employeeById.get(h.employeeId)?.name ?? "Unknown"}
                   </td>

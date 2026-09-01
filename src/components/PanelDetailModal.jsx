@@ -15,7 +15,7 @@ import {
   CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD,
 } from "../data/mockData";
 import { getPdfBlob } from "../data/pdfStore";
-import { Modal, Button, RoleBadge, formatNumber, formatDate } from "./ui";
+import { Modal, Button, RoleBadge, formatNumber, formatDate, formatTimeRange } from "./ui";
 
 const SIZE_PRESETS = [
   { label: "Small", inches: 1 },
@@ -241,13 +241,16 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
       ) : (
         <div className="space-y-1.5 max-h-52 overflow-y-auto scrollbar-thin pr-1">
           {completed.map((h) => (
-            <div key={h.id} className="flex items-center justify-between text-[12px]">
+            <div key={h.id} className="flex items-start justify-between text-[12px]">
               <span className="text-ink-700">
                 <span className="font-medium text-ink-900">{h.employee?.name ?? "Unknown"}</span> added{" "}
                 <span className="font-semibold">+{h.percentAdded}%</span> to {h.stage ?? "a task"}
                 {h.taskCompleted && <span className="text-good-600 font-semibold"> (completed)</span>}
               </span>
-              <span className="text-ink-400 shrink-0 ml-2">{h.date}</span>
+              <span className="text-ink-400 shrink-0 ml-2 text-right">
+                {h.date}
+                <div className="text-[10px]">{formatTimeRange(h.startedAt, h.endedAt)}</div>
+              </span>
             </div>
           ))}
         </div>

@@ -150,6 +150,8 @@ function toDbWorkHistory(h) {
     panels: h.panels,
     hours: h.hours,
     status: h.status,
+    started_at: h.startedAt ?? null,
+    ended_at: h.endedAt ?? null,
   };
 }
 // Partial-update mapper for correcting an existing row — see
@@ -168,6 +170,8 @@ const WORKHISTORY_FIELD_MAP = {
   panels: "panels",
   hours: "hours",
   status: "status",
+  startedAt: "started_at",
+  endedAt: "ended_at",
 };
 function toDbWorkHistoryFields(fields) {
   const out = {};
@@ -197,6 +201,13 @@ function fromDbWorkHistory(row) {
     // which stamps a local approximation immediately so a just-logged
     // session shows up in trend charts without waiting on that round trip.
     createdAt: row.created_at ?? null,
+    // The actual clock-in/clock-out timestamps for this specific session —
+    // "what time to what time," shown wherever a logged session is listed
+    // (formatTimeRange in ui.jsx). Distinct from createdAt/date above:
+    // those say when the row was written, these say when the work itself
+    // happened. Null on any entry logged before this field existed.
+    startedAt: row.started_at ?? null,
+    endedAt: row.ended_at ?? null,
   };
 }
 
@@ -883,10 +894,11 @@ export function AppProvider({ children }) {
     // by someone else in the meantime).
     const startingProgress = taskProgress(workHistory, activeSession.panel, activeSession.stage, activeSession.buildId);
     const cappedPercent = Math.max(0, Math.min(100 - startingProgress, Number(percentAdded) || 0));
+    const now = new Date();
     const entry = {
       id: genId("h"),
       employeeId: activeSession.employeeId,
-      date: new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
+      date: now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
       panel: activeSession.panel,
       stage: activeSession.stage,
       buildId: activeSession.buildId,
@@ -896,7 +908,15 @@ export function AppProvider({ children }) {
       panels: 1,
       hours: Math.max(0, Number(hours) || 0),
       status,
-      createdAt: new Date().toISOString(),
+      createdAt: now.toISOString(),
+      // The real scan-in time (from the active session this closes out) to
+      // whenever this finalize call happened — same "what time to what
+      // time" record a normal stopSession entry gets, even though the
+      // *hours* credited here may be a manually-corrected number rather
+      // than the literal span between these two timestamps (that's the
+      // whole point of this path — the raw elapsed time isn't trusted).
+      startedAt: activeSession.startedAt ? new Date(activeSession.startedAt).toISOString() : null,
+      endedAt: now.toISOString(),
     };
     setWorkHistory((prev) => [entry, ...prev]);
     supabase.from("assemblyos_work_history").insert(toDbWorkHistory(entry)).then(reportResult);
@@ -1079,7 +1099,8 @@ export function AppProvider({ children }) {
     // never counted as logged work — effectiveElapsedMs subtracts whatever
     // portion of this session's wall-clock span fell inside one, regardless
     // of when the session actually started or stopped relative to it.
-    const hours = effectiveElapsedMs(session.startedAt, Date.now()) / 3600000;
+    const stoppedAt = Date.now();
+    const hours = effectiveElapsedMs(session.startedAt, stoppedAt) / 3600000;
     const pct = Math.max(0, Math.min(100 - session.startingProgress, percentAdded ?? 0));
     const isComplete = session.startingProgress + pct >= 100;
     const isConnectStage = session.stage === CONNECT_STAGE_LABEL;
@@ -1109,7 +1130,15 @@ export function AppProvider({ children }) {
       // Local approximation so this session shows up in analytics trend
       // charts immediately, without waiting on the DB round trip that
       // eventually confirms the real created_at (see fromDbWorkHistory).
-      createdAt: new Date().toISOString(),
+      createdAt: new Date(stoppedAt).toISOString(),
+      // Real clock-in/clock-out times for this session — "what time to
+      // what time" — shown wherever a logged session is listed
+      // (formatTimeRange in ui.jsx). session.startedAt is the actual
+      // Date.now() captured when the technician scanned in (startSession);
+      // stoppedAt is this same moment, captured once above so the elapsed-
+      // hours math and the displayed end time never drift apart.
+      startedAt: new Date(session.startedAt).toISOString(),
+      endedAt: new Date(stoppedAt).toISOString(),
     };
     setWorkHistory((prev) => [entry, ...prev]);
     supabase.from("assemblyos_work_history").insert(toDbWorkHistory(entry)).then(reportResult);

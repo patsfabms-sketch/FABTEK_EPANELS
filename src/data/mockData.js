@@ -453,6 +453,7 @@ export function isClockedIn(clockLog, employeeId) {
 
 // Stages a technician can pick after scanning a panel's QR code.
 export const productionStages = [
+  { key: "prep", label: "Panel Prep" },
   { key: "verify", label: "Verifying Packout" },
   { key: "sort", label: "Sorting" },
   { key: "build", label: "Control Panel Build" },
@@ -463,6 +464,17 @@ export const productionStages = [
   { key: "subbuild", label: "Agastat Sub. Assm." },
   { key: "auxpanel", label: "Aux Panel Build" },
   { key: "auxswitch", label: "Aux Switch Assm." },
+  // Not a real panel-build step like the others, but uses the exact same
+  // scan-a-panel-and-log-a-session flow (see AppContext.startSession) — a
+  // technician being trained scans in against whatever panel the training
+  // is happening on, so the hours are captured for real rather than going
+  // untracked. taskProgress is scoped per (panel, stage, buildId), so a
+  // Training session's own progress bucket never mixes with any other
+  // stage's — it shows up in hours/analytics like any other logged
+  // session, it just isn't "build progress" in the way Route/Terminate or
+  // Control Panel Build are, so Progress Added on a Training session is
+  // typically left at 0%.
+  { key: "training", label: "Training" },
 ];
 
 // Key of the "Route/Terminate" stage — the one stage where progress logged

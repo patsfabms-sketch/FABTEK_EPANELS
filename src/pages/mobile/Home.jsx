@@ -10,7 +10,7 @@ import {
   unitLabel,
   isClockedIn,
 } from "../../data/mockData";
-import { Button, formatNumber } from "../../components/ui";
+import { Button, formatNumber, formatTimeRange } from "../../components/ui";
 import QrScanner from "../../components/QrScanner";
 
 export default function Home() {
@@ -212,6 +212,9 @@ export default function Home() {
           <p className="text-[11px] text-ink-500 mt-0.5">
             {workHistory[0].stage} · {workHistory[0].taskCompleted ? "Completed" : `+${workHistory[0].percentAdded}%`} ·{" "}
             {workHistory[0].date}
+          </p>
+          <p className="text-[10px] text-ink-400 mt-0.5">
+            {formatTimeRange(workHistory[0].startedAt, workHistory[0].endedAt)}
           </p>
         </div>
       )}

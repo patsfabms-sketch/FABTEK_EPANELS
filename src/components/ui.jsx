@@ -178,3 +178,26 @@ export function formatDate(iso) {
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
+
+// "What time to what time" for a logged session — startedAt/endedAt are
+// ISO timestamps stamped by AppContext (stopSession, finalizeActiveSession)
+// at the moment a session actually starts/stops. Entries logged before this
+// field existed won't have either, so this degrades to "Not recorded"
+// rather than showing "Invalid Date". A stuck session that got closed out a
+// day (or more) later spans two different calendar dates, so each side
+// gets its own short date stamp whenever they land on different days —
+// otherwise just the two times, since the date is already shown elsewhere
+// on every row this appears in.
+export function formatTimeRange(startedAt, endedAt) {
+  if (!startedAt || !endedAt) return "Not recorded";
+  const start = new Date(startedAt);
+  const end = new Date(endedAt);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return "Not recorded";
+  const timeFmt = { hour: "numeric", minute: "2-digit" };
+  const dateFmt = { month: "short", day: "numeric" };
+  const sameDay = start.toDateString() === end.toDateString();
+  const startStr = start.toLocaleTimeString("en-US", timeFmt);
+  const endStr = end.toLocaleTimeString("en-US", timeFmt);
+  if (sameDay) return `${startStr} – ${endStr}`;
+  return `${startStr} ${start.toLocaleDateString("en-US", dateFmt)} – ${endStr} ${end.toLocaleDateString("en-US", dateFmt)}`;
+}

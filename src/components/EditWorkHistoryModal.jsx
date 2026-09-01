@@ -7,7 +7,24 @@ import {
   connectionsPerHour,
   CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD,
 } from "../data/mockData";
-import { Modal, Button } from "./ui";
+import { Modal, Button, formatTimeRange } from "./ui";
+
+// datetime-local inputs work in the browser's local time with no timezone
+// info in the string ("YYYY-MM-DDTHH:mm") — new Date() on a string like
+// that is parsed as local time already, so this round-trips cleanly with
+// the ISO strings AppContext stores (startedAt/endedAt).
+function isoToDatetimeLocal(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function datetimeLocalToIso(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
 
 // Admin-only correction tool for a single logged session — for the
 // "mishap" cases: wrong stage scanned, hours mistyped, wrong panel,
@@ -28,6 +45,8 @@ export default function EditWorkHistoryModal({ entry, employeeName, onClose }) {
   const [taskCompleted, setTaskCompleted] = useState(!!entry.taskCompleted);
   const [connectionsCredited, setConnectionsCredited] = useState(String(entry.connectionsCredited ?? 0));
   const [status, setStatus] = useState(entry.status || "Verified");
+  const [startTime, setStartTime] = useState(isoToDatetimeLocal(entry.startedAt));
+  const [endTime, setEndTime] = useState(isoToDatetimeLocal(entry.endedAt));
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   // The stage dropdown is built from the current list of production stages —
@@ -72,6 +91,8 @@ export default function EditWorkHistoryModal({ entry, employeeName, onClose }) {
       taskCompleted,
       connectionsCredited: Number.isFinite(connNum) && connNum >= 0 ? connNum : entry.connectionsCredited,
       status,
+      startedAt: datetimeLocalToIso(startTime),
+      endedAt: datetimeLocalToIso(endTime),
     });
     onClose();
   }
@@ -118,6 +139,32 @@ export default function EditWorkHistoryModal({ entry, employeeName, onClose }) {
         onChange={(e) => setDate(e.target.value)}
         className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
       />
+
+      <div className="grid grid-cols-2 gap-3 mb-1">
+        <div>
+          <label className="text-xs font-semibold text-ink-500">Start Time</label>
+          <input
+            type="datetime-local"
+            value={startTime}
+            onChange={(e) => setStartTime(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-paper-200 px-2 py-2 text-[13px]"
+          />
+        </div>
+        <div>
+          <label className="text-xs font-semibold text-ink-500">End Time</label>
+          <input
+            type="datetime-local"
+            value={endTime}
+            onChange={(e) => setEndTime(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-paper-200 px-2 py-2 text-[13px]"
+          />
+        </div>
+      </div>
+      <p className="text-[11px] text-ink-500 mb-3">
+        {startTime && endTime
+          ? `Currently reads as ${formatTimeRange(datetimeLocalToIso(startTime), datetimeLocalToIso(endTime))}. Clear either field if the real clock time isn't known.`
+          : "Not recorded on this entry — fill both in if the real clock-in/clock-out time is known."}
+      </p>
 
       <label className="text-xs font-semibold text-ink-500">Stage / Session Type</label>
       <select
