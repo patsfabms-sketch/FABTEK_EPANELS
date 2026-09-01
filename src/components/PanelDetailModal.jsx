@@ -3,7 +3,15 @@ import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import QRCode from "qrcode";
 import { useApp } from "../context/AppContext";
-import { panelQrValue, siblingBuilds, computeBuildStats, connectionsForPanel, taskProgress, unitLabel } from "../data/mockData";
+import {
+  panelQrValue,
+  siblingBuilds,
+  computeBuildStats,
+  connectionsForPanel,
+  taskProgress,
+  unitLabel,
+  CONNECT_STAGE_LABEL,
+} from "../data/mockData";
 import { getPdfBlob } from "../data/pdfStore";
 import { Modal, Button, RoleBadge, formatNumber, formatDate } from "./ui";
 
@@ -41,6 +49,7 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
   const { panels, workHistory, activeSessions, employees, pricePerConnection } = useApp();
   const [showPrint, setShowPrint] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
+  const [endingSession, setEndingSession] = useState(null);
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -191,7 +200,16 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
               </div>
               {s.employee && <RoleBadge role={s.employee.role} />}
               <p className="text-[11px] font-semibold text-brand-700 mt-1.5">{s.stage}</p>
-              <p className="text-[11px] text-ink-500 mt-0.5">{formatElapsed(s.startedAt, now)} elapsed</p>
+              <p className={`text-[11px] mt-0.5 ${now - s.startedAt > 4 * 3600000 ? "text-warn-600 font-semibold" : "text-ink-500"}`}>
+                {formatElapsed(s.startedAt, now)} elapsed
+                {now - s.startedAt > 4 * 3600000 ? " — looks stuck?" : ""}
+              </p>
+              <button
+                onClick={() => setEndingSession(s)}
+                className="text-[11px] font-semibold text-bad-600 hover:text-bad-700 mt-1.5"
+              >
+                End Session
+              </button>
             </div>
           ))}
         </div>
@@ -241,6 +259,114 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
           }}
         />
       )}
+      {endingSession && (
+        <EndSessionModal activeSession={endingSession} now={now} onClose={() => setEndingSession(null)} />
+      )}
+    </Modal>
+  );
+}
+
+// Admin correction for a session that's still showing "active" but
+// shouldn't be — most commonly a technician who forgot to scan out (see the
+// "looks stuck?" hint above). Unlike a technician's own Stop Session screen,
+// the runaway elapsed time here is never trusted or pre-filled as the
+// answer — the admin enters what was actually worked, or discards the
+// session outright with nothing logged if it shouldn't be credited at all.
+// Ending it this way is a stopgap for a session that's ALREADY stuck; the
+// weekly clock-in/out QR (Team page) is what's meant to catch this going
+// forward, since a clock-out scan auto-ends any session the technician
+// still has open at that moment using the scan time as the real stop time.
+function EndSessionModal({ activeSession, now, onClose }) {
+  const { adminEndSession, employees } = useApp();
+  const employee = employees.find((e) => e.id === activeSession.employeeId);
+  const [hours, setHours] = useState("");
+  const [percentAdded, setPercentAdded] = useState("0");
+  const [connectionsCredited, setConnectionsCredited] = useState("0");
+  const [taskCompleted, setTaskCompleted] = useState(false);
+  const rawElapsed = formatElapsed(activeSession.startedAt, now);
+
+  function handleLogAndEnd() {
+    adminEndSession(activeSession, {
+      hours: Number(hours) || 0,
+      percentAdded: Number(percentAdded) || 0,
+      connectionsCredited: Number(connectionsCredited) || 0,
+      taskCompleted,
+    });
+    onClose();
+  }
+
+  function handleDiscard() {
+    adminEndSession(activeSession, { discard: true });
+    onClose();
+  }
+
+  return (
+    <Modal onClose={onClose} widthClass="max-w-sm">
+      <h3 className="text-base font-bold text-ink-900 mb-1">End Session</h3>
+      <p className="text-[11px] text-ink-500 mb-4">
+        {employee?.name ?? "Unknown Technician"} · {activeSession.stage} · Panel {activeSession.panel}
+      </p>
+
+      <div className="rounded-lg bg-warn-50 border border-warn-100 px-3 py-2.5 mb-4">
+        <p className="text-[11px] text-warn-700">
+          Raw elapsed time on this session: <span className="font-semibold">{rawElapsed}</span>. That's almost
+          certainly not accurate if they forgot to scan out — enter the real hours worked below (or discard the
+          session if nothing should be credited).
+        </p>
+      </div>
+
+      <label className="text-xs font-semibold text-ink-500">Hours actually worked</label>
+      <input
+        type="number"
+        step="0.1"
+        min="0"
+        value={hours}
+        onChange={(e) => setHours(e.target.value)}
+        placeholder="e.g. 2.5"
+        className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
+      />
+
+      <label className="text-xs font-semibold text-ink-500">Progress Added (%)</label>
+      <input
+        type="number"
+        step="10"
+        min="0"
+        max="100"
+        value={percentAdded}
+        onChange={(e) => setPercentAdded(e.target.value)}
+        className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
+      />
+
+      {activeSession.stage === CONNECT_STAGE_LABEL && (
+        <>
+          <label className="text-xs font-semibold text-ink-500">Connections Credited</label>
+          <input
+            type="number"
+            step="1"
+            min="0"
+            value={connectionsCredited}
+            onChange={(e) => setConnectionsCredited(e.target.value)}
+            className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
+          />
+        </>
+      )}
+
+      <label className="flex items-center gap-2 mb-5 cursor-pointer">
+        <input type="checkbox" checked={taskCompleted} onChange={(e) => setTaskCompleted(e.target.checked)} />
+        <span className="text-xs font-semibold text-ink-700">Task marked complete</span>
+      </label>
+
+      <p className="text-[11px] text-ink-400 mb-4">
+        This gets logged as <span className="font-semibold">Flagged</span>, same as anything else corrected
+        outside a technician's normal Stop Session screen — visible on their Recent Activity for a second look.
+      </p>
+
+      <div className="flex items-center justify-between pt-3 border-t border-paper-100">
+        <button onClick={handleDiscard} className="text-[12px] font-semibold text-bad-600 hover:text-bad-700">
+          Discard (no hours logged)
+        </button>
+        <Button onClick={handleLogAndEnd}>Log &amp; End Session</Button>
+      </div>
     </Modal>
   );
 }

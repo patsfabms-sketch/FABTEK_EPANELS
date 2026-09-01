@@ -1,12 +1,15 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
+import QRCode from "qrcode";
 import { useApp } from "../../context/AppContext";
-import { ROLES, ROLE_META } from "../../data/mockData";
+import { ROLES, ROLE_META, isClockedIn, isoWeekKey, clockQrValue } from "../../data/mockData";
 import { Card, SectionTitle, RoleBadge, AttainmentPill, Button, Modal } from "../../components/ui";
 
 export default function Team() {
-  const { employees, admins, workHistory, addEmployee, updateEmployee, deleteEmployee, addAdmin } = useApp();
+  const { employees, admins, workHistory, clockLog, addEmployee, updateEmployee, deleteEmployee, addAdmin } = useApp();
   const navigate = useNavigate();
+  const [showClockQr, setShowClockQr] = useState(false);
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState("attainmentPct");
   const [sortDir, setSortDir] = useState("desc");
@@ -59,6 +62,9 @@ export default function Team() {
             placeholder="Search name or role…"
             className="rounded-lg border border-paper-200 bg-white px-3 py-2 text-[13px] w-64"
           />
+          <Button variant="ghost" onClick={() => setShowClockQr(true)}>
+            Print This Week's Clock QR
+          </Button>
           <Button onClick={() => setShowAddForm(true)}>+ Add Team Member</Button>
         </div>
       </div>
@@ -89,6 +95,7 @@ export default function Team() {
               <Th label="Employee" onClick={() => toggleSort("name")} active={sortKey === "name"} dir={sortDir} />
               <Th label="Role" onClick={() => toggleSort("role")} active={sortKey === "role"} dir={sortDir} />
               <th className="px-4 py-3 font-semibold">Station</th>
+              <th className="px-4 py-3 font-semibold">Clock Status</th>
               <th className="px-4 py-3 font-semibold">Active Panel</th>
               <Th label="Current Avg" onClick={() => toggleSort("currentWeekAvg")} active={sortKey === "currentWeekAvg"} dir={sortDir} />
               <Th label="Attainment" onClick={() => toggleSort("attainmentPct")} active={sortKey === "attainmentPct"} dir={sortDir} />
@@ -113,6 +120,9 @@ export default function Team() {
                 </td>
                 <td className="px-4 py-2.5"><RoleBadge role={e.role} /></td>
                 <td className="px-4 py-2.5 text-ink-600">{e.station}</td>
+                <td className="px-4 py-2.5">
+                  <ClockStatusBadge clockLog={clockLog} employeeId={e.id} />
+                </td>
                 <td className="px-4 py-2.5 text-ink-600">{e.panel ?? "—"}</td>
                 <td className="px-4 py-2.5 text-ink-700 font-medium">{e.currentWeekAvg}</td>
                 <td className="px-4 py-2.5"><AttainmentPill pct={e.attainmentPct} /></td>
@@ -236,7 +246,128 @@ export default function Team() {
           }}
         />
       )}
+
+      {showClockQr && <ClockQrModal onClose={() => setShowClockQr(false)} />}
     </div>
+  );
+}
+
+// Live "clocked in since HH:MM" / "not clocked in" status per technician —
+// driven by AppContext.clockLog, so it updates in real time as the shop
+// scans in/out on the shared clock QR (see ClockQrModal below).
+function ClockStatusBadge({ clockLog, employeeId }) {
+  if (!isClockedIn(clockLog, employeeId)) {
+    return <span className="text-[11px] text-ink-400">Not clocked in</span>;
+  }
+  const open = clockLog.find((c) => c.employeeId === employeeId && !c.clockedOutAt);
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-good-600">
+      <span className="w-1.5 h-1.5 rounded-full bg-good-500 animate-pulse" />
+      Since {new Date(open.clockedInAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+    </span>
+  );
+}
+
+// Generates and prints this week's master clock QR — one sheet, posted at
+// the shop's clock-in point, that every technician scans with their own
+// phone (already signed in as themselves) to clock in on arrival and clock
+// out at the end of the day. It encodes the current ISO week (see
+// isoWeekKey/clockQrValue in mockData.js), so a stale printout stops
+// working once the week rolls over (with a one-week grace period — see
+// isValidClockWeek) rather than staying valid forever if it's ever
+// photographed and used from off-site.
+function ClockQrModal({ onClose }) {
+  const weekKey = useMemo(() => isoWeekKey(), []);
+  const value = useMemo(() => clockQrValue(weekKey), [weekKey]);
+  const [dataUrl, setDataUrl] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    QRCode.toDataURL(value, { width: 640, margin: 1 })
+      .then((url) => {
+        if (!cancelled) setDataUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setError("Couldn't generate the QR code. Try again.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [value]);
+
+  return (
+    <Modal onClose={onClose} widthClass="max-w-sm">
+      <div className="flex items-start justify-between mb-4">
+        <h3 className="text-base font-bold text-ink-900">This Week's Clock QR</h3>
+        <button onClick={onClose} aria-label="Close" className="text-ink-400 hover:text-ink-700 text-xl leading-none px-1">
+          ×
+        </button>
+      </div>
+
+      <div className="flex justify-center mb-3">
+        <div className="rounded-lg border border-paper-200 bg-white p-3">
+          {dataUrl ? (
+            <img src={dataUrl} alt="This week's clock QR code" width={200} height={200} />
+          ) : error ? (
+            <p className="text-xs text-bad-600 w-[200px] text-center py-16">{error}</p>
+          ) : (
+            <div className="w-[200px] h-[200px] flex items-center justify-center text-xs text-ink-400">Generating…</div>
+          )}
+        </div>
+      </div>
+      <p className="text-center text-[12px] font-semibold text-ink-900">Week of {weekKey}</p>
+      <p className="text-center text-[11px] text-ink-500 mb-5">
+        Post this where everyone clocks in. Every technician scans it with their own phone — once on arrival, once
+        on the way out. Print a fresh one each week; last week's stays valid for a one-week grace period, then
+        stops working.
+      </p>
+
+      <div className="flex justify-end gap-2">
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button onClick={() => window.print()} disabled={!dataUrl}>
+          <PrinterIcon /> Print
+        </Button>
+      </div>
+
+      {dataUrl &&
+        createPortal(
+          <div id="clock-qr-print-area">
+            <style>{`
+              #clock-qr-print-area { display: none; }
+              @media print {
+                body > #root { display: none !important; }
+                #clock-qr-print-area {
+                  display: flex;
+                  flex-direction: column;
+                  align-items: center;
+                  justify-content: center;
+                  height: 100vh;
+                  gap: 0.2in;
+                }
+                #clock-qr-print-area img { width: 4in; height: 4in; }
+                #clock-qr-print-area p { font-size: 14pt; font-weight: 700; margin: 0; }
+                #clock-qr-print-area span { font-size: 10pt; color: #444; }
+                @page { size: letter; margin: 0; }
+              }
+            `}</style>
+            <img src={dataUrl} alt="This week's clock QR code" />
+            <p>Scan to Clock In / Clock Out</p>
+            <span>Week of {weekKey}</span>
+          </div>,
+          document.body
+        )}
+    </Modal>
+  );
+}
+
+function PrinterIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v7H6z" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
 

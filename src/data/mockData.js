@@ -374,6 +374,60 @@ export function parsePanelQrValue(raw) {
   return { id: match[1], jobNumber: match[2] || "" };
 }
 
+// ---------------------------------------------------------------------------
+// Time clock — the shared "master" QR code every employee scans with their
+// own already-signed-in phone: once to clock in on arrival, again to clock
+// out at the end of the day (see AppContext.clockScan). It isn't tied to any
+// one employee — a single sheet is printed and posted at the shop's
+// clock-in point; who it's for is whoever is signed into the phone doing
+// the scanning. It encodes the ISO week it was printed for, so a stale
+// printout — or a photo of one somebody tries to use from off-site after
+// it's taken down — naturally stops working once the week rolls over; see
+// isValidClockWeek for the exact grace window that keeps a late Monday
+// reprint from locking the whole floor out of clocking in.
+export function isoWeekKey(date = new Date()) {
+  // Standard ISO 8601 week numbering: the Thursday of a given week decides
+  // which year that week belongs to, and week 1 is the week containing that
+  // year's first Thursday.
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7; // Sunday is 0 in JS — treat it as day 7
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum); // shift to this week's Thursday
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNum = Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(weekNum).padStart(2, "0")}`;
+}
+
+export function clockQrValue(weekKey = isoWeekKey()) {
+  return `ASSEMBLYOS:CLOCK:${weekKey}`;
+}
+
+// Inverse of clockQrValue — {weekKey} or null if the scanned code isn't a
+// recognized AssemblyOS clock code at all (a panel sticker, a stray QR code
+// someone points the camera at, etc). Whether that week is still valid to
+// use is a separate check — see isValidClockWeek.
+export function parseClockQrValue(raw) {
+  if (typeof raw !== "string") return null;
+  const match = raw.match(/^ASSEMBLYOS:CLOCK:(\d{4}-W\d{2})$/);
+  if (!match) return null;
+  return { weekKey: match[1] };
+}
+
+// Accepts this week's printout AND last week's — never anything older. The
+// one-week grace window is deliberate: without it, a manager who's a day
+// late reprinting on Monday morning would lock every technician out of
+// clocking in until the new sheet goes up.
+export function isValidClockWeek(weekKey, now = new Date()) {
+  return weekKey === isoWeekKey(now) || weekKey === isoWeekKey(new Date(now.getTime() - 7 * 86400000));
+}
+
+// Whether an employee currently has an open clock-in (a clockLog row with no
+// matching clock-out yet). This is the toggle AppContext.clockScan uses to
+// decide whether the next master-QR scan for that employee means "clock in"
+// or "clock out".
+export function isClockedIn(clockLog, employeeId) {
+  return clockLog.some((c) => c.employeeId === employeeId && !c.clockedOutAt);
+}
+
 // Stages a technician can pick after scanning a panel's QR code.
 export const productionStages = [
   { key: "verify", label: "Verifying Packout" },

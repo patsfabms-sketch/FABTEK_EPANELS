@@ -1,6 +1,15 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
-import { initialRoleDefaults, attainment, taskProgress, generateUsername, CONNECT_STAGE_LABEL, effectiveElapsedMs } from "../data/mockData";
+import {
+  initialRoleDefaults,
+  attainment,
+  taskProgress,
+  generateUsername,
+  CONNECT_STAGE_LABEL,
+  effectiveElapsedMs,
+  parseClockQrValue,
+  isValidClockWeek,
+} from "../data/mockData";
 
 const AppContext = createContext(null);
 
@@ -187,6 +196,32 @@ function fromDbWorkHistory(row) {
   };
 }
 
+// Time clock — see clockQrValue/parseClockQrValue in mockData.js and
+// AppContext.clockScan below. `hours` here is the RAW gross duration
+// between clock-in and clock-out (no break subtraction) — it's a presence
+// record ("how long were they at work"), not a "hours worked" figure; that
+// distinction already lives on workHistory.hours, which does exclude paid
+// breaks (see effectiveElapsedMs). Kept separate on purpose so this table
+// stays a simple, honest attendance log.
+function toDbClockLog(c) {
+  return {
+    id: c.id,
+    employee_id: c.employeeId,
+    clocked_in_at: new Date(c.clockedInAt).toISOString(),
+    clocked_out_at: c.clockedOutAt ? new Date(c.clockedOutAt).toISOString() : null,
+    hours: c.hours,
+  };
+}
+function fromDbClockLog(row) {
+  return {
+    id: row.id,
+    employeeId: row.employee_id,
+    clockedInAt: row.clocked_in_at ? new Date(row.clocked_in_at).getTime() : null,
+    clockedOutAt: row.clocked_out_at ? new Date(row.clocked_out_at).getTime() : null,
+    hours: row.hours === null || row.hours === undefined ? null : Number(row.hours),
+  };
+}
+
 function fromDbActiveSession(row) {
   return {
     id: row.id,
@@ -230,6 +265,7 @@ export function AppProvider({ children }) {
   const [panels, setPanels] = useState([]);
   const [pricePerConnection, setPricePerConnectionState] = useState(0.75);
   const [activeSessions, setActiveSessions] = useState([]);
+  const [clockLog, setClockLog] = useState([]);
   const [admins, setAdmins] = useState([]);
   const [ready, setReady] = useState(false);
 
@@ -321,10 +357,20 @@ export function AppProvider({ children }) {
         supabase.from("assemblyos_work_history").select("*").order("created_at", { ascending: false }),
         supabase.from("assemblyos_active_sessions").select("*"),
         supabase.from("assemblyos_activity_feed").select("*").order("created_at", { ascending: false }).limit(300),
+        supabase.from("assemblyos_clock_log").select("*").order("clocked_in_at", { ascending: false }),
       ]);
       if (cancelled) return;
-      const [employeesRes, adminsRes, roleDefaultsRes, settingsRes, panelsRes, workHistoryRes, activeSessionsRes, activityFeedRes] =
-        results;
+      const [
+        employeesRes,
+        adminsRes,
+        roleDefaultsRes,
+        settingsRes,
+        panelsRes,
+        workHistoryRes,
+        activeSessionsRes,
+        activityFeedRes,
+        clockLogRes,
+      ] = results;
       const firstError = results.find((r) => r.error)?.error;
       if (firstError) {
         console.error("[AssemblyOS backend] initial load failed, retrying…", firstError);
@@ -351,6 +397,7 @@ export function AppProvider({ children }) {
       setWorkHistory(workHistoryRes.data.map(fromDbWorkHistory));
       setActiveSessions(activeSessionsRes.data.map(fromDbActiveSession));
       setActivityFeed(activityFeedRes.data.map(fromDbActivity));
+      setClockLog(clockLogRes.data.map(fromDbClockLog));
       setSaveError(false);
       setInitialLoadFailed(false);
       setReady(true);
@@ -426,6 +473,13 @@ export function AppProvider({ children }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "assemblyos_activity_feed" }, (payload) => {
         if (payload.eventType === "INSERT") {
           setActivityFeed((prev) => mergePrepend(prev, fromDbActivity(payload.new), (a) => a.id));
+        }
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "assemblyos_clock_log" }, (payload) => {
+        if (payload.eventType === "DELETE") {
+          setClockLog((prev) => prev.filter((c) => c.id !== payload.old.id));
+        } else {
+          setClockLog((prev) => mergeUpsert(prev, fromDbClockLog(payload.new), (c) => c.id));
         }
       })
       .subscribe();
@@ -782,6 +836,145 @@ export function AppProvider({ children }) {
     );
   }
 
+  // Shared by adminEndSession and clockScan's auto-stop-on-clock-out safety
+  // net — both need to turn one activeSessions row into a permanent
+  // workHistory entry (or discard it outright) without going through the
+  // device-local `session` state stopSession uses, since neither caller is
+  // the technician deliberately stopping their own live session in the
+  // moment. Defaults to status "Flagged" since every caller of this is some
+  // kind of exception path — a stuck session, an auto-ended one at clock-out
+  // — worth a manager's second look rather than trusted at face value like a
+  // normal stopSession entry.
+  function finalizeActiveSession(activeSession, opts = {}) {
+    const { hours = 0, percentAdded = 0, connectionsCredited = 0, taskCompleted = false, status = "Flagged", discard = false } = opts;
+    setActiveSessions((prev) => prev.filter((s) => s.id !== activeSession.id));
+    supabase.from("assemblyos_active_sessions").delete().eq("id", activeSession.id).then(reportResult);
+    if (discard) return null;
+
+    const entry = {
+      id: genId("h"),
+      employeeId: activeSession.employeeId,
+      date: new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
+      panel: activeSession.panel,
+      stage: activeSession.stage,
+      buildId: activeSession.buildId,
+      percentAdded: Math.max(0, Math.min(100, Number(percentAdded) || 0)),
+      taskCompleted: !!taskCompleted,
+      connectionsCredited: Math.max(0, Number(connectionsCredited) || 0),
+      panels: 1,
+      hours: Math.max(0, Number(hours) || 0),
+      status,
+      createdAt: new Date().toISOString(),
+    };
+    setWorkHistory((prev) => [entry, ...prev]);
+    supabase.from("assemblyos_work_history").insert(toDbWorkHistory(entry)).then(reportResult);
+    return entry;
+  }
+
+  // Admin-initiated: force-ends another employee's stuck/runaway active
+  // session from the desktop console (they forgot to scan out and it's
+  // been running for hours — see the "Currently scanned in" list on a
+  // panel's detail view). The runaway elapsed time itself is never trusted
+  // — the admin supplies the actual hours/progress/connections to credit,
+  // or discards the session entirely with nothing logged if it shouldn't be
+  // credited at all (e.g. a stray scan). Also clears this device's own
+  // local `session` state if the admin happens to be looking at this on the
+  // same device the technician is signed into.
+  function adminEndSession(activeSession, opts = {}) {
+    const emp = employees.find((e) => e.id === activeSession.employeeId);
+    const entry = finalizeActiveSession(activeSession, opts);
+    if (currentUserId === activeSession.employeeId) {
+      setSession({
+        active: false,
+        panel: null,
+        stage: null,
+        targetConnections: null,
+        buildId: null,
+        startingProgress: 0,
+        startedAt: null,
+        notes: "",
+      });
+    }
+    logActivity(
+      entry
+        ? `ended a stuck session for ${emp?.name ?? "a technician"} — ${entry.hours} hrs logged (admin correction)`
+        : `discarded a stuck session for ${emp?.name ?? "a technician"} (no hours logged)`,
+      `${activeSession.stage ?? "Session"} · Panel ${activeSession.panel}`,
+      { kind: "verify" }
+    );
+  }
+
+  // ---- Time clock ---------------------------------------------------------
+  // Handles a scan of the shared "master" clock QR (see clockQrValue in
+  // mockData.js) — one code posted at the shop's clock-in point, scanned by
+  // whoever is signed in on the phone doing the scanning. Toggles based on
+  // whether this employee already has an open clockLog row: no open row ->
+  // clock in; an open row -> clock out. Clocking out is also the safety net
+  // for a forgotten "Stop Session": every active session still running for
+  // this employee gets auto-ended at the clock-out timestamp (accurate
+  // hours, since the scan itself is a real stop time) with 0% progress and
+  // status "Flagged", so the hours aren't lost but a manager knows to
+  // follow up on what was actually accomplished.
+  function clockScan(rawValue) {
+    const parsed = parseClockQrValue(rawValue);
+    if (!parsed) return { ok: false, error: "That doesn't look like the shop's clock QR code." };
+    if (!isValidClockWeek(parsed.weekKey)) {
+      return { ok: false, error: "This clock sheet is from a previous week — ask your manager for this week's printout." };
+    }
+    if (!currentUserId) return { ok: false, error: "You're not signed in." };
+
+    const now = Date.now();
+    const openEntry = clockLog.find((c) => c.employeeId === currentUserId && !c.clockedOutAt);
+
+    if (!openEntry) {
+      const entry = { id: genId("clk"), employeeId: currentUserId, clockedInAt: now, clockedOutAt: null, hours: null };
+      setClockLog((prev) => [entry, ...prev]);
+      supabase.from("assemblyos_clock_log").insert(toDbClockLog(entry)).then(reportResult);
+      logActivity("clocked in", "", { who: currentUser?.name ?? "Technician", kind: "scan" });
+      return { ok: true, type: "in" };
+    }
+
+    // Raw gross duration (no break subtraction) — a presence record, not a
+    // "hours worked" figure; see the comment on toDbClockLog.
+    const grossHours = Number(((now - openEntry.clockedInAt) / 3600000).toFixed(2));
+    setClockLog((prev) => prev.map((c) => (c.id === openEntry.id ? { ...c, clockedOutAt: now, hours: grossHours } : c)));
+    supabase
+      .from("assemblyos_clock_log")
+      .update({ clocked_out_at: new Date(now).toISOString(), hours: grossHours })
+      .eq("id", openEntry.id)
+      .then(reportResult);
+
+    const stuckSessions = activeSessions.filter((s) => s.employeeId === currentUserId);
+    stuckSessions.forEach((s) => {
+      finalizeActiveSession(s, {
+        hours: Number((effectiveElapsedMs(s.startedAt, now) / 3600000).toFixed(2)),
+        percentAdded: 0,
+        status: "Flagged",
+      });
+    });
+    if (session.active) {
+      setSession({
+        active: false,
+        panel: null,
+        stage: null,
+        targetConnections: null,
+        buildId: null,
+        startingProgress: 0,
+        startedAt: null,
+        notes: "",
+      });
+    }
+
+    logActivity(
+      stuckSessions.length > 0
+        ? `clocked out — ${stuckSessions.length} session${stuckSessions.length === 1 ? "" : "s"} auto-ended and flagged for review`
+        : "clocked out",
+      "",
+      { who: currentUser?.name ?? "Technician", kind: stuckSessions.length > 0 ? "verify" : "scan" }
+    );
+    return { ok: true, type: "out", autoEndedSessions: stuckSessions.length, hours: grossHours };
+  }
+
   const employeesWithAttainment = useMemo(
     () =>
       employees.map((emp) => ({
@@ -923,6 +1116,9 @@ export function AppProvider({ children }) {
     panels,
     pricePerConnection,
     activeSessions,
+    clockLog,
+    clockScan,
+    adminEndSession,
     currentUser,
     admins,
     currentAdmin,

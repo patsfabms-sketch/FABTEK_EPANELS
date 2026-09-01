@@ -1,7 +1,15 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
-import { productionStages, connectionsForPanel, taskProgress, currentBuilds, parsePanelQrValue, unitLabel } from "../../data/mockData";
+import {
+  productionStages,
+  connectionsForPanel,
+  taskProgress,
+  currentBuilds,
+  parsePanelQrValue,
+  unitLabel,
+  isClockedIn,
+} from "../../data/mockData";
 import { Button, formatNumber } from "../../components/ui";
 import QrScanner from "../../components/QrScanner";
 
@@ -15,6 +23,8 @@ export default function Home() {
     pricePerConnection,
     currentUser,
     roleDefaults,
+    clockLog,
+    clockScan,
   } = useApp();
   const navigate = useNavigate();
   const [showScanner, setShowScanner] = useState(false);
@@ -22,6 +32,35 @@ export default function Home() {
   const [selectedStage, setSelectedStage] = useState(null);
   const [useCamera, setUseCamera] = useState(true);
   const [scanError, setScanError] = useState("");
+
+  const [showClockScanner, setShowClockScanner] = useState(false);
+  const [clockScanAttempt, setClockScanAttempt] = useState(0);
+  const [clockError, setClockError] = useState("");
+  const [clockResult, setClockResult] = useState(null);
+
+  const clockedIn = isClockedIn(clockLog, currentUser.id);
+  const openClockEntry = clockLog.find((c) => c.employeeId === currentUser.id && !c.clockedOutAt);
+
+  function closeClockScanner() {
+    setShowClockScanner(false);
+    setClockError("");
+    setClockScanAttempt(0);
+  }
+
+  // Called with the raw string decoded off the shop's shared clock QR (see
+  // mockData.clockQrValue/parseClockQrValue) — toggles clock in/out for
+  // whoever is signed in on this phone via AppContext.clockScan, which also
+  // auto-ends any panel session they forgot to stop when clocking out.
+  function handleClockDetect(raw) {
+    const result = clockScan(raw);
+    if (!result.ok) {
+      setClockError(result.error);
+      setClockScanAttempt((n) => n + 1); // remounts QrScanner so it can detect again
+      return;
+    }
+    setClockResult(result);
+    closeClockScanner();
+  }
 
   const dailyGoal = currentUser.override ?? roleDefaults[currentUser.role].daily;
   const todayHours = workHistory
@@ -89,6 +128,43 @@ export default function Home() {
       <p className="text-[11px] text-ink-500 mt-0.5">
         {currentUser.role} · {currentUser.station}
       </p>
+
+      {clockResult && (
+        <div className="mt-3 rounded-xl2 bg-brand-50 border border-brand-100 p-3 flex items-start justify-between gap-2">
+          <p className="text-[12px] text-brand-700">
+            {clockResult.type === "in"
+              ? "Clocked in — have a good shift!"
+              : clockResult.autoEndedSessions > 0
+                ? `Clocked out — ${clockResult.hours} hrs recorded. ${clockResult.autoEndedSessions} session${clockResult.autoEndedSessions === 1 ? "" : "s"} you hadn't stopped ${clockResult.autoEndedSessions === 1 ? "was" : "were"} auto-ended and flagged for your manager to review.`
+                : `Clocked out — ${clockResult.hours} hrs recorded. See you next shift!`}
+          </p>
+          <button onClick={() => setClockResult(null)} className="text-brand-600 text-sm leading-none shrink-0">
+            ×
+          </button>
+        </div>
+      )}
+
+      <div className="mt-3 rounded-xl2 bg-white border border-paper-200 shadow-card p-4 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-ink-500">Time Clock</p>
+          <p className={`text-sm font-semibold mt-0.5 ${clockedIn ? "text-good-600" : "text-ink-900"}`}>
+            {clockedIn && openClockEntry
+              ? `Clocked in since ${new Date(openClockEntry.clockedInAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+              : "Not clocked in"}
+          </p>
+        </div>
+        <Button
+          variant={clockedIn ? "danger" : "primary"}
+          className="shrink-0"
+          onClick={() => {
+            setClockError("");
+            setClockScanAttempt(0);
+            setShowClockScanner(true);
+          }}
+        >
+          {clockedIn ? "Clock Out" : "Clock In"}
+        </Button>
+      </div>
 
       {session.active ? (
         <div className="mt-4 rounded-xl2 bg-good-50 border border-good-100 p-4">
@@ -268,6 +344,23 @@ export default function Home() {
                 </Button>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {showClockScanner && (
+        <div className="fixed inset-0 z-20 bg-black/40 flex items-end justify-center" onClick={closeClockScanner}>
+          <div className="w-full max-w-[400px] bg-white rounded-t-2xl p-5 pb-8" onClick={(e) => e.stopPropagation()}>
+            <div className="w-10 h-1 rounded-full bg-paper-200 mx-auto mb-4" />
+            <p className="text-sm font-semibold text-ink-900 mb-1">
+              {clockedIn ? "Scan to Clock Out" : "Scan to Clock In"}
+            </p>
+            <p className="text-[11px] text-ink-500 mb-4">
+              Point your camera at the clock QR code posted at the shop entrance.
+              {clockedIn && " Any panel session you forgot to stop will be ended automatically."}
+            </p>
+            <QrScanner key={clockScanAttempt} onDetect={handleClockDetect} onCancel={closeClockScanner} />
+            {clockError && <p className="text-[11px] text-bad-600 mt-3">{clockError}</p>}
           </div>
         </div>
       )}

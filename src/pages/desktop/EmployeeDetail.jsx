@@ -20,7 +20,7 @@ const TONE_ACCENT = {
 export default function EmployeeDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { employees, roleDefaults, workHistory, panels } = useApp();
+  const { employees, roleDefaults, workHistory, panels, clockLog } = useApp();
 
   const employee = employees.find((e) => e.id === id);
   const [editingEntry, setEditingEntry] = useState(null);
@@ -61,6 +61,18 @@ export default function EmployeeDetail() {
     recentCapacityTotal > 0 ? Math.round((recentNonProductiveTotal / recentCapacityTotal) * 100) : 0;
   const maxNonProductiveHours = Math.max(...recentNonProductiveDays.map((d) => d.nonProductiveHours), 1);
 
+  // Clock in/out history from the shared weekly clock QR (see the "Print
+  // This Week's Clock QR" button on the Team page) — most recent first.
+  const clockEvents = useMemo(
+    () =>
+      clockLog
+        .filter((c) => c.employeeId === id)
+        .slice()
+        .sort((a, b) => b.clockedInAt - a.clockedInAt),
+    [clockLog, id]
+  );
+  const openClockEntry = clockEvents.find((c) => !c.clockedOutAt);
+
   if (!employee) {
     return (
       <div className="p-6 max-w-[1100px] mx-auto">
@@ -91,6 +103,13 @@ export default function EmployeeDetail() {
             <span className="text-xs text-ink-500">
               {employee.station} · Panel {employee.panel ?? "unassigned"}
             </span>
+            {openClockEntry && (
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-good-600">
+                <span className="w-1.5 h-1.5 rounded-full bg-good-500 animate-pulse" />
+                Clocked in since{" "}
+                {new Date(openClockEntry.clockedInAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+              </span>
+            )}
           </div>
           <p className="text-[11px] text-ink-500 mt-1">
             @{employee.username}
@@ -193,6 +212,47 @@ export default function EmployeeDetail() {
           </Card>
         </>
       )}
+
+      <SectionTitle
+        title="Clock In / Out History"
+        subtitle="From the shared weekly clock QR — last 10 events, most recent first"
+      />
+      <Card padded={false} className="overflow-x-auto mb-8">
+        {clockEvents.length === 0 ? (
+          <p className="text-xs text-ink-400 text-center py-8">No clock events yet.</p>
+        ) : (
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
+                <th className="px-4 py-3 font-semibold">Date</th>
+                <th className="px-4 py-3 font-semibold">Clocked In</th>
+                <th className="px-4 py-3 font-semibold">Clocked Out</th>
+                <th className="px-4 py-3 font-semibold">Hours</th>
+              </tr>
+            </thead>
+            <tbody>
+              {clockEvents.slice(0, 10).map((c, i) => (
+                <tr key={c.id} className={`border-b border-paper-100 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
+                  <td className="px-4 py-2.5 text-ink-900 font-medium">
+                    {new Date(c.clockedInAt).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+                  </td>
+                  <td className="px-4 py-2.5 text-ink-700">
+                    {new Date(c.clockedInAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                  </td>
+                  <td className="px-4 py-2.5 text-ink-700">
+                    {c.clockedOutAt ? (
+                      new Date(c.clockedOutAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+                    ) : (
+                      <span className="text-good-600 font-semibold">Still clocked in</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5 text-ink-700">{c.hours != null ? c.hours : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
 
       <SectionTitle title="Recent Activity" subtitle="Logged sessions from the technician app" />
       <Card padded={false} className="overflow-x-auto">
