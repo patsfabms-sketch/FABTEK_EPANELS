@@ -262,29 +262,32 @@ export function effectiveElapsedMs(startedAt, endedAt) {
 }
 
 // ---------------------------------------------------------------------------
-// Non-productive time — every minute of a Panel Technician's scheduled shift
-// that ISN'T covered by a logged production session (and isn't already a
-// paid break — see BREAK_WINDOWS above). This is entirely DERIVED from
-// workHistory; there's no separate clock-in feature and no new action for a
-// technician to take, so "how much of today wasn't spent on a task" is
-// computed after the fact from the same session data everything else here
-// already uses.
+// Non-productive time — every minute a Panel Technician was clocked in (via
+// the shared Clock In/Out QR they scan on arrival and departure — see
+// assemblyos_clock_log / the `clockLog` state) that ISN'T covered by a
+// logged production session (and isn't already a paid break — see
+// BREAK_WINDOWS above). Capacity used to mean a fixed 7:00am–4:30pm shift
+// window for everyone; now that every technician scans in and out for real,
+// capacity is each technician's OWN actual clocked-in time that day instead
+// of an assumed schedule. Because this is now driven by a real attendance
+// signal, a day where someone clocked in but never logged a session now
+// correctly shows up as a fully non-productive day, instead of being
+// silently skipped — which doubles as an attendance record (see the
+// Clock In/Out History table).
 //
-// Scoped to Panel Technicians only (ROLES.TECH) — this fixed 7:00am–4:30pm
-// shift window is what Pat gave us for that role specifically. Lead Panel
-// Technicians have a different daily-hours target (7 vs 8 — see
-// initialRoleDefaults) and no fixed shift window was specified for them, so
-// they're left out of this for now rather than guessing their hours.
-export const TECH_SHIFT_WINDOW = { startMinute: 7 * 60, endMinute: 16 * 60 + 30 }; // 7:00 am – 4:30 pm
+// Scoped to Panel Technicians only (ROLES.TECH), same as before — Leads
+// don't punch this same Clock In/Out QR flow today, so there's no clock
+// signal to derive their capacity from either.
 
-// Local calendar-day key ("2026-08-31") for an ISO timestamp, or null if the
-// timestamp is missing/unparseable. workHistory rows are bucketed to a day
-// by `createdAt` (the real DB-assigned timestamp), not the `date` display
+// Local calendar-day key ("2026-08-31") for a timestamp (epoch ms or an ISO
+// string both work — `new Date()` accepts either), or null if the timestamp
+// is missing/unparseable. workHistory rows are bucketed to a day by
+// `createdAt` (the real DB-assigned timestamp), not the `date` display
 // string, since `date` has no year in it — same reasoning as the trend
 // charts (see fromDbWorkHistory's comment on createdAt).
-function dayKeyFor(iso) {
-  if (!iso) return null;
-  const d = new Date(iso);
+function dayKeyFor(ts) {
+  if (!ts) return null;
+  const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return null;
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
@@ -292,38 +295,55 @@ function dayKeyFor(iso) {
 // Per-day non-productive breakdown for one technician, most recent day
 // first: [{ dayKey, label, loggedHours, capacityHours, nonProductiveHours }].
 //
-// IMPORTANT LIMITATION: only days with at least one workHistory row for this
-// employee are included. There's no attendance/clock-in signal anywhere in
-// this app, so a day with zero logged sessions is indistinguishable between
-// "sat around all day" and "day off / sick / not yet hired" — rather than
-// guess, that day is simply left out of the result instead of being counted
-// as a full 8.5-hour idle shift, which would misrepresent absences as
-// non-productive time. A day that DOES have logged work still gets its full
-// non-productive gap computed correctly, including before the first session
-// of the day and after the last.
-export function computeNonProductiveTime(workHistory, employeeId, { now = Date.now() } = {}) {
-  const byDay = new Map();
+// Which days show up here is driven by `clockLog`, not by which days have
+// logged sessions — a day only appears if the technician actually clocked
+// in, and once it does, ALL of their clocked-in time that day counts as
+// capacity, even on days with nothing logged against it.
+//
+// A clock entry that's still open (no clockedOutAt) is capped at "now" if
+// it's today's entry, or at the end of that calendar day if it's a forgotten
+// clock-out from a past day — the same caution the app already applies to a
+// still-running panel session (see finalizeActiveSession in AppContext.jsx)
+// — so one missed clock-out doesn't balloon into days of phantom
+// non-productive time.
+export function computeNonProductiveTime(workHistory, clockLog, employeeId, { now = Date.now() } = {}) {
+  const todayKey = dayKeyFor(now);
+
+  // Group this technician's clock entries by the calendar day they clocked
+  // IN on (an entry that happens to run past midnight is still counted
+  // against its start day, same as a workHistory session would be).
+  const clockByDay = new Map();
+  clockLog.forEach((c) => {
+    if (c.employeeId !== employeeId) return;
+    const key = dayKeyFor(c.clockedInAt);
+    if (!key) return;
+    if (!clockByDay.has(key)) clockByDay.set(key, { sampleDate: new Date(c.clockedInAt), entries: [] });
+    clockByDay.get(key).entries.push(c);
+  });
+
+  // Logged production hours for this technician, summed per calendar day —
+  // same source/calc as before, just pre-grouped for a quick lookup below.
+  const loggedMsByDay = new Map();
   workHistory.forEach((h) => {
     if (h.employeeId !== employeeId) return;
     const key = dayKeyFor(h.createdAt);
     if (!key) return; // no reliable timestamp — can't bucket this row to a day
-    if (!byDay.has(key)) byDay.set(key, { loggedMs: 0, sampleDate: new Date(h.createdAt) });
-    byDay.get(key).loggedMs += (h.hours || 0) * 3600000;
+    loggedMsByDay.set(key, (loggedMsByDay.get(key) || 0) + (h.hours || 0) * 3600000);
   });
 
-  const todayKey = dayKeyFor(new Date(now).toISOString());
-
-  const results = [...byDay.entries()].map(([key, { loggedMs, sampleDate }]) => {
+  const results = [...clockByDay.entries()].map(([key, { sampleDate, entries }]) => {
     const dayStart = new Date(sampleDate);
     dayStart.setHours(0, 0, 0, 0);
-    const shiftStart = dayStart.getTime() + TECH_SHIFT_WINDOW.startMinute * 60000;
-    const shiftEndFull = dayStart.getTime() + TECH_SHIFT_WINDOW.endMinute * 60000;
-    // For today specifically, cap capacity at "now" — otherwise someone
-    // checking at 9am would see hours of "non-productive time" for the part
-    // of the shift that hasn't even happened yet.
-    const shiftEnd = key === todayKey ? Math.min(shiftEndFull, now) : shiftEndFull;
-    const capacityMs = shiftEnd > shiftStart ? effectiveElapsedMs(shiftStart, shiftEnd) : 0;
+    const dayEnd = dayStart.getTime() + 86400000;
+
+    const capacityMs = entries.reduce((sum, c) => {
+      const start = c.clockedInAt;
+      const end = c.clockedOutAt ?? (key === todayKey ? now : dayEnd);
+      return sum + effectiveElapsedMs(start, end);
+    }, 0);
+    const loggedMs = loggedMsByDay.get(key) || 0;
     const nonProductiveMs = Math.max(0, capacityMs - loggedMs);
+
     return {
       dayKey: key,
       label: dayStart.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
@@ -336,18 +356,18 @@ export function computeNonProductiveTime(workHistory, employeeId, { now = Date.n
   return results.sort((a, b) => (a.dayKey < b.dayKey ? 1 : -1));
 }
 
-// Shop-wide roll-up across every Panel Technician in `employees` (Leads are
-// skipped — see the note on TECH_SHIFT_WINDOW), for the Analytics page.
-// `workHistory` is expected to already be whatever range/role/employee
-// filter the page has applied — same pattern as every other Reports.jsx
-// computation, so this automatically respects the page's date-range picker.
+// Shop-wide roll-up across every Panel Technician in `employees`, for the
+// Reports page. `workHistory` and `clockLog` are expected to already be
+// whatever range/role/employee filter the page has applied — same pattern as
+// every other Reports.jsx computation, so this automatically respects the
+// page's date-range picker.
 // Sorted by most non-productive hours first, so the technicians it's most
 // worth asking about float to the top.
-export function computeNonProductiveSummary(workHistory, employees) {
+export function computeNonProductiveSummary(workHistory, clockLog, employees) {
   const perEmployee = employees
     .filter((e) => e.role === ROLES.TECH)
     .map((emp) => {
-      const days = computeNonProductiveTime(workHistory, emp.id);
+      const days = computeNonProductiveTime(workHistory, clockLog, emp.id);
       const totalLoggedHours = Number(days.reduce((s, d) => s + d.loggedHours, 0).toFixed(1));
       const totalCapacityHours = Number(days.reduce((s, d) => s + d.capacityHours, 0).toFixed(1));
       const totalNonProductiveHours = Number(days.reduce((s, d) => s + d.nonProductiveHours, 0).toFixed(1));

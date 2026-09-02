@@ -37,7 +37,7 @@ const RANGE_OPTIONS = [
 const ROLE_FILTERS = ["All Roles", ...Object.values(ROLES)];
 
 export default function Reports() {
-  const { employees, roleDefaults, workHistory, panels } = useApp();
+  const { employees, roleDefaults, workHistory, panels, clockLog } = useApp();
   const [range, setRange] = useState(RANGE_OPTIONS[1]);
   const [roleFilter, setRoleFilter] = useState("All Roles");
   const [employeeFilter, setEmployeeFilter] = useState("All Employees");
@@ -135,12 +135,21 @@ export default function Reports() {
   }, [leaderboard, filteredEmployees, sortBy]);
 
   // Non-productive time — Panel Technicians only (see the note on
-  // TECH_SHIFT_WINDOW in mockData.js); reuses this same filteredHistory /
-  // filteredEmployees pair, so it automatically respects the range, role,
-  // and employee filters above just like every other KPI on this page.
+  // computeNonProductiveTime in mockData.js). Clock entries get the same
+  // range + employee filtering as filteredHistory above, so this
+  // automatically respects the range, role, and employee filters just like
+  // every other KPI on this page.
+  const rangeFilteredClockLog = useMemo(
+    () => (rangeCutoff ? clockLog.filter((c) => c.clockedInAt && c.clockedInAt >= rangeCutoff) : clockLog),
+    [clockLog, rangeCutoff]
+  );
+  const filteredClockLog = useMemo(
+    () => rangeFilteredClockLog.filter((c) => filteredEmployeeIds.has(c.employeeId)),
+    [rangeFilteredClockLog, filteredEmployeeIds]
+  );
   const nonProductive = useMemo(
-    () => computeNonProductiveSummary(filteredHistory, filteredEmployees),
-    [filteredHistory, filteredEmployees]
+    () => computeNonProductiveSummary(filteredHistory, filteredClockLog, filteredEmployees),
+    [filteredHistory, filteredClockLog, filteredEmployees]
   );
   const maxNonProductiveHours = Math.max(...nonProductive.perEmployee.map((r) => r.totalNonProductiveHours), 1);
 
@@ -492,22 +501,22 @@ export default function Reports() {
 
       <SectionTitle
         title="Non-Productive Time"
-        subtitle="Panel Technicians only — time inside the 7:00am–4:30pm shift not covered by a logged session (paid breaks already excluded), sorted highest first"
+        subtitle="Panel Technicians only — clocked-in time (via the Clock In/Out QR) not covered by a logged session (paid breaks already excluded), sorted highest first"
       />
       <div className="flex flex-wrap gap-4 mb-4">
         <StatCard
           label="Total Non-Productive"
           value={`${formatNumber(nonProductive.totalNonProductiveHours)} hrs`}
-          sub={`${nonProductive.nonProductivePct}% of tracked shift time · ${range.label}`}
+          sub={`${nonProductive.nonProductivePct}% of tracked clocked-in time · ${range.label}`}
           accent={nonProductive.nonProductivePct > 25 ? "text-bad-600" : nonProductive.nonProductivePct > 10 ? "text-warn-600" : "text-good-600"}
         />
-        <StatCard label="Shift Capacity Tracked" value={`${formatNumber(nonProductive.totalCapacityHours)} hrs`} sub="Sum across all technicians' tracked workdays" />
+        <StatCard label="Clocked-In Time Tracked" value={`${formatNumber(nonProductive.totalCapacityHours)} hrs`} sub="Sum across all technicians' tracked workdays" />
       </div>
       <Card padded={false} className="overflow-x-auto mb-8">
         {nonProductive.perEmployee.length === 0 ? (
           <p className="text-xs text-ink-400 text-center py-8">
-            No tracked workdays for Panel Technicians in this range — shows up once at least one session is logged
-            on a given day.
+            No tracked workdays for Panel Technicians in this range — shows up once at least one clock-in is
+            recorded on a given day.
           </p>
         ) : (
           <>
@@ -518,7 +527,7 @@ export default function Reports() {
                   <th className="px-4 py-3 font-semibold">Workdays Tracked</th>
                   <th className="px-4 py-3 font-semibold">Logged Hours</th>
                   <th className="px-4 py-3 font-semibold">Non-Productive Hours</th>
-                  <th className="px-4 py-3 font-semibold">% of Shift</th>
+                  <th className="px-4 py-3 font-semibold">% of Clocked-In Time</th>
                 </tr>
               </thead>
               <tbody>

@@ -43,15 +43,15 @@ export default function EmployeeDetail() {
   const totalSessions = breakdown.reduce((s, b) => s + b.sessions, 0);
   const totalHours = Number(breakdown.reduce((s, b) => s + b.hours, 0).toFixed(1));
 
-  // Non-productive time — how much of this Panel Technician's fixed
-  // 7:00am–4:30pm shift wasn't covered by a logged session, day by day. See
-  // computeNonProductiveTime's own comment in mockData.js for why days with
-  // zero logged sessions (a day off, before they were hired, etc.) are left
-  // out rather than counted as a full idle shift. Leads aren't on this fixed
-  // shift window, so the section is skipped for them entirely.
+  // Non-productive time — how much of this Panel Technician's actual
+  // clocked-in time (from the shared Clock In/Out QR, below) wasn't covered
+  // by a logged session, day by day. See computeNonProductiveTime's own
+  // comment in mockData.js for how days are now driven by real clock-in
+  // data instead of a fixed shift window. Leads don't punch this same
+  // Clock In/Out QR flow today, so the section is skipped for them entirely.
   const nonProductiveDays = useMemo(
-    () => (employee?.role === ROLES.TECH ? computeNonProductiveTime(workHistory, employee.id) : []),
-    [employee, workHistory]
+    () => (employee?.role === ROLES.TECH ? computeNonProductiveTime(workHistory, clockLog, employee.id) : []),
+    [employee, workHistory, clockLog]
   );
   const recentNonProductiveDays = nonProductiveDays.slice(0, 7);
   const recentNonProductiveTotal = Number(recentNonProductiveDays.reduce((s, d) => s + d.nonProductiveHours, 0).toFixed(1));
@@ -166,12 +166,12 @@ export default function EmployeeDetail() {
         <>
           <SectionTitle
             title="Non-Productive Time"
-            subtitle="Time inside the 7:00am–4:30pm shift not covered by a logged session (paid breaks already excluded) — last 7 tracked workdays"
+            subtitle="Clocked-in time not covered by a logged session (paid breaks already excluded) — last 7 tracked workdays"
           />
           <Card className="mb-8">
             {recentNonProductiveDays.length === 0 ? (
               <p className="text-xs text-ink-400 text-center py-6">
-                No tracked workdays yet — this shows up once at least one session has been logged on a given day.
+                No tracked workdays yet — this shows up once they've clocked in at least once via the Clock In/Out QR.
               </p>
             ) : (
               <>
@@ -179,10 +179,10 @@ export default function EmployeeDetail() {
                   <StatCard
                     label="Non-Productive"
                     value={`${recentNonProductiveTotal} hrs`}
-                    sub={`${recentNonProductivePct}% of shift time`}
+                    sub={`${recentNonProductivePct}% of clocked-in time`}
                     accent={recentNonProductivePct > 25 ? "text-bad-600" : recentNonProductivePct > 10 ? "text-warn-600" : "text-good-600"}
                   />
-                  <StatCard label="Shift Capacity" value={`${recentCapacityTotal} hrs`} sub={`${recentNonProductiveDays.length} workday(s) tracked`} />
+                  <StatCard label="Clocked-In Time" value={`${recentCapacityTotal} hrs`} sub={`${recentNonProductiveDays.length} workday(s) tracked`} />
                 </div>
                 <div className="space-y-3.5">
                   {recentNonProductiveDays.map((d) => (
@@ -190,7 +190,7 @@ export default function EmployeeDetail() {
                       <div className="flex items-center justify-between mb-1">
                         <span className="text-[13px] font-medium text-ink-900">{d.label}</span>
                         <span className="text-[11px] text-ink-500">
-                          {d.nonProductiveHours} hrs non-productive · {d.loggedHours} hrs logged of {d.capacityHours} hrs shift
+                          {d.nonProductiveHours} hrs non-productive · {d.loggedHours} hrs logged of {d.capacityHours} hrs clocked in
                         </span>
                       </div>
                       <div className="h-2 rounded-full bg-paper-100 overflow-hidden">
@@ -203,8 +203,8 @@ export default function EmployeeDetail() {
                   ))}
                 </div>
                 <p className="text-[11px] text-ink-400 mt-4 pt-3 border-t border-paper-100">
-                  Only days with at least one logged session are shown — a day with no sessions could mean they
-                  weren't scheduled to work rather than idle all day, so it's left out instead of guessed at.
+                  Only days with a recorded clock-in are shown — a day is only counted once they've actually scanned
+                  in, so a day they weren't scheduled to work never shows up as idle time.
                 </p>
               </>
             )}
