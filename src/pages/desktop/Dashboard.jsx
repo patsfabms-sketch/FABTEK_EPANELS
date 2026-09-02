@@ -1,8 +1,8 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
-import { productionStages } from "../../data/mockData";
-import { Card, SectionTitle, StatCard, RoleBadge, formatNumber } from "../../components/ui";
+import { productionStages, isClockedIn } from "../../data/mockData";
+import { Card, SectionTitle, StatCard, RoleBadge, Modal, formatNumber } from "../../components/ui";
 
 const KIND_ICON = {
   connect: "🔌",
@@ -13,7 +13,8 @@ const KIND_ICON = {
 };
 
 export default function Dashboard() {
-  const { employees, activityFeed, activeSessions, workHistory } = useApp();
+  const { employees, activityFeed, activeSessions, workHistory, clockLog } = useApp();
+  const [showClockModal, setShowClockModal] = useState(false);
 
   const employeeById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
 
@@ -27,6 +28,20 @@ export default function Dashboard() {
       activeEmployees: employees.length,
     };
   }, [employees, activeSessions, workHistory]);
+
+  // Same signal Team.jsx's per-row "Clock Status" badge already reads
+  // (assemblyos_clock_log via AppContext.clockLog, an open row = still
+  // clocked in) — this just rolls the whole roster up into one quick
+  // "how many are actually here right now" number for the dashboard,
+  // with the same live update-as-people-scan behavior.
+  const clockedInEmployees = useMemo(
+    () => employees.filter((e) => isClockedIn(clockLog, e.id)),
+    [employees, clockLog]
+  );
+  const notClockedInEmployees = useMemo(
+    () => employees.filter((e) => !isClockedIn(clockLog, e.id)),
+    [employees, clockLog]
+  );
 
   const pipelineCounts = useMemo(
     () =>
@@ -69,6 +84,14 @@ export default function Dashboard() {
           accent="text-brand-600"
         />
         <StatCard label="Active Employees" value={stats.activeEmployees} sub="On the roster" />
+        <Card onClick={() => setShowClockModal(true)} className="flex-1 min-w-[160px]">
+          <p className="text-xs font-medium text-ink-500">Clocked In</p>
+          <p className="text-2xl font-bold mt-1 text-good-600">
+            {clockedInEmployees.length}
+            <span className="text-ink-400 text-base font-semibold"> / {employees.length}</span>
+          </p>
+          <p className="text-[11px] text-brand-600 font-semibold mt-1">On the shop's Clock QR — see who →</p>
+        </Card>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
@@ -152,6 +175,101 @@ export default function Dashboard() {
           )}
         </Card>
       </div>
+
+      {showClockModal && (
+        <ClockedInModal
+          clockLog={clockLog}
+          clockedInEmployees={clockedInEmployees}
+          notClockedInEmployees={notClockedInEmployees}
+          onClose={() => setShowClockModal(false)}
+        />
+      )}
     </div>
+  );
+}
+
+// Quick-reference drill-down behind the "Clocked In" stat — who's actually
+// scanned in on the shop's shared Clock QR right now vs. who isn't, in one
+// glance, rather than an admin having to scan down every row of the full
+// Team roster to piece it together. Same live `clockLog` data Team.jsx's
+// per-row Clock Status badge already reads, so this always agrees with
+// that page.
+function ClockedInModal({ clockLog, clockedInEmployees, notClockedInEmployees, onClose }) {
+  // Earliest arrival first — the quick-reference case this is for is "who's
+  // been here since when," so the person who's been on the clock longest
+  // naturally sits at the top.
+  const clockedInSorted = useMemo(() => {
+    return [...clockedInEmployees].sort((a, b) => {
+      const aOpen = clockLog.find((c) => c.employeeId === a.id && !c.clockedOutAt);
+      const bOpen = clockLog.find((c) => c.employeeId === b.id && !c.clockedOutAt);
+      return (aOpen?.clockedInAt ?? 0) - (bOpen?.clockedInAt ?? 0);
+    });
+  }, [clockedInEmployees, clockLog]);
+  const notClockedInSorted = useMemo(
+    () => [...notClockedInEmployees].sort((a, b) => a.name.localeCompare(b.name)),
+    [notClockedInEmployees]
+  );
+
+  return (
+    <Modal onClose={onClose} widthClass="max-w-lg">
+      <div className="flex items-start justify-between mb-1">
+        <h3 className="text-base font-bold text-ink-900">Clock QR Status</h3>
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="text-ink-400 hover:text-ink-700 text-xl leading-none px-1"
+        >
+          ×
+        </button>
+      </div>
+      <p className="text-[11px] text-ink-500 mb-4">
+        Who's scanned in on the shop's shared Clock QR right now — live, same as the Clock Status column on the Team
+        page.
+      </p>
+
+      <p className="text-[11px] font-semibold text-good-600 uppercase tracking-wide mb-2">
+        Clocked In ({clockedInSorted.length})
+      </p>
+      {clockedInSorted.length === 0 ? (
+        <p className="text-xs text-ink-400 mb-4">No one is currently clocked in.</p>
+      ) : (
+        <div className="space-y-1.5 mb-4 max-h-52 overflow-y-auto scrollbar-thin pr-1">
+          {clockedInSorted.map((e) => {
+            const open = clockLog.find((c) => c.employeeId === e.id && !c.clockedOutAt);
+            return (
+              <div key={e.id} className="flex items-center justify-between rounded-lg px-2.5 py-2 bg-good-50/50">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-1.5 h-1.5 rounded-full bg-good-500 animate-pulse shrink-0" />
+                  <span className="text-[13px] font-medium text-ink-900 truncate">{e.name}</span>
+                  <RoleBadge role={e.role} />
+                </div>
+                <span className="text-[11px] font-semibold text-good-600 shrink-0 ml-2">
+                  {open ? `Since ${new Date(open.clockedInAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <p className="text-[11px] font-semibold text-ink-500 uppercase tracking-wide mb-2 pt-3 border-t border-paper-100">
+        Not Clocked In ({notClockedInSorted.length})
+      </p>
+      {notClockedInSorted.length === 0 ? (
+        <p className="text-xs text-ink-400">Everyone on the roster is clocked in.</p>
+      ) : (
+        <div className="space-y-1.5 max-h-52 overflow-y-auto scrollbar-thin pr-1">
+          {notClockedInSorted.map((e) => (
+            <div key={e.id} className="flex items-center justify-between rounded-lg px-2.5 py-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-paper-300 shrink-0" />
+                <span className="text-[13px] font-medium text-ink-700 truncate">{e.name}</span>
+                <RoleBadge role={e.role} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
   );
 }
