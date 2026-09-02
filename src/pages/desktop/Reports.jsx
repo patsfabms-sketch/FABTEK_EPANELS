@@ -20,8 +20,10 @@ import {
   computeNonProductiveSummary,
   computeAvgBuildTime,
   estimateBuildHours,
+  isShippedSessionRow,
   productionStages,
   CONNECT_STAGE_KEY,
+  SHIP_STAGE_LABEL,
 } from "../../data/mockData";
 import { Card, SectionTitle, StatCard, RoleBadge, Button, Modal, formatNumber, formatCurrency, formatTimeRange } from "../../components/ui";
 
@@ -98,10 +100,7 @@ export default function Reports() {
     () => filteredHistory.reduce((s, h) => s + (h.connectionsCredited || 0), 0),
     [filteredHistory]
   );
-  const panelsShipped = useMemo(
-    () => filteredHistory.filter((h) => h.stage === "QC/Wrap" && h.taskCompleted).length,
-    [filteredHistory]
-  );
+  const panelsShipped = useMemo(() => filteredHistory.filter(isShippedSessionRow).length, [filteredHistory]);
 
   const avgAttainment = useMemo(() => {
     if (!filteredEmployees.length) return 0;
@@ -174,7 +173,7 @@ export default function Reports() {
   // stages, Agastat sub-assembly, Training) start unchecked since they only
   // apply to some jobs, and the admin knows better than any default whether
   // this particular hypothetical panel needs them.
-  const CORE_ROUTING_KEYS = ["prep", "verify", "sort", "build", "connect", "test", "ship"];
+  const CORE_ROUTING_KEYS = ["prep", "verify", "sort", "build", "connect", "test", "qc", "wrap"];
   const [routingKeys, setRoutingKeys] = useState(() => new Set(CORE_ROUTING_KEYS));
   const [estimateConnections, setEstimateConnections] = useState("");
   const buildEstimate = useMemo(
@@ -266,7 +265,7 @@ export default function Reports() {
         <StatCard label="Total Hours" value={formatNumber(totalHours)} sub={range.label} accent="text-brand-600" />
         <StatCard label="Total Connections" value={formatNumber(totalConnections)} sub="Route/Terminate stage" accent="text-good-600" />
         <StatCard label="AVG Goal Attainment" value={`${avgAttainment}%`} sub="Target: 100% Sustained" />
-        <StatCard label="Panels Shipped" value={panelsShipped} sub="QC/Wrap completed" />
+        <StatCard label="Panels Shipped" value={panelsShipped} sub={`${SHIP_STAGE_LABEL} completed`} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
@@ -385,7 +384,7 @@ export default function Reports() {
           </div>
           <p className="text-[11px] text-ink-400 mt-3 pt-3 border-t border-paper-100">
             {avgBuildTime.completedBuilds === 0
-              ? "No panel has a completed QC/Wrap entry on file yet — projections need at least one fully shipped panel to compute from."
+              ? `No panel has a completed ${SHIP_STAGE_LABEL} entry on file yet — projections need at least one fully shipped panel to compute from.`
               : `"Avg Hours / Panel" sums every hour logged against a shipped panel across every stage it went through, then averages across all ${avgBuildTime.completedBuilds} shipped panel${avgBuildTime.completedBuilds === 1 ? "" : "s"} on file. Median is included alongside it since one unusually long or short build can pull the average around. "Hrs / Connection" is Route/Terminate hours only, divided by connections — the rate the calculator below uses.`}
           </p>
         </Card>
@@ -743,7 +742,7 @@ function StageDetailModal({ stage, rows, employees, panels, rangeLabel, onClose 
 }
 
 // Drill-down behind the "Shipped Panels" stat in the build-time projection
-// card — every panel that has a completed QC/Wrap entry on file, with its
+// card — every panel that has a completed Wrap entry on file, with its
 // real total hours and connections, so "how did we get an average of X
 // hours per panel" always has a real answer one click away, same
 // philosophy as StageDetailModal above.
@@ -754,7 +753,7 @@ function BuildTimeDetailModal({ builds, onClose }) {
         <div>
           <h3 className="text-base font-bold text-ink-900">Shipped Panels — Build Time Detail</h3>
           <p className="text-[11px] text-ink-500 mt-0.5">
-            Every panel with a completed QC/Wrap entry on file, all-time · sorted by total hours
+            Every panel with a completed {SHIP_STAGE_LABEL} entry on file, all-time · sorted by total hours
           </p>
         </div>
         <button onClick={onClose} aria-label="Close" className="text-ink-400 hover:text-ink-700 text-xl leading-none px-1">

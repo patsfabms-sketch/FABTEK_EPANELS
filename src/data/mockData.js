@@ -479,7 +479,8 @@ export const productionStages = [
   { key: "build", label: "Control Panel Build" },
   { key: "connect", label: "Route/Terminate" },
   { key: "test", label: "Continuity Test" },
-  { key: "ship", label: "QC/Wrap" },
+  { key: "qc", label: "QC" },
+  { key: "wrap", label: "Wrap" },
   { key: "rework", label: "Rework" },
   { key: "subbuild", label: "Agastat Sub. Assm." },
   { key: "auxpanel", label: "Aux Panel Build" },
@@ -504,12 +505,29 @@ export const productionStages = [
 export const CONNECT_STAGE_KEY = "connect";
 export const CONNECT_STAGE_LABEL = productionStages.find((s) => s.key === CONNECT_STAGE_KEY)?.label;
 
-// Key of the "QC/Wrap" stage — the last step in a normal routing, so a
-// build having a *completed* workHistory row here is this app's definition
-// of "this panel actually shipped" (same signal Reports.jsx's "Panels
-// Shipped" stat and computeAvgBuildTime below both key off of).
-export const SHIP_STAGE_KEY = "ship";
+// Key of the "Wrap" stage — the last step in a normal routing (QC/Wrap used
+// to be one combined step; see the split note below), so a build having a
+// *completed* workHistory row here is this app's definition of "this panel
+// actually shipped" (same signal Reports.jsx's "Panels Shipped" stat and
+// computeAvgBuildTime below both key off of).
+export const SHIP_STAGE_KEY = "wrap";
 export const SHIP_STAGE_LABEL = productionStages.find((s) => s.key === SHIP_STAGE_KEY)?.label;
+
+// "QC/Wrap" used to be a single combined session type; it's now two separate
+// ones ("QC" and "Wrap") so a technician can scan/log each step on its own.
+// A handful of sessions logged before this split still carry the old
+// combined label verbatim — they still display and edit fine everywhere
+// (Session Log, EmployeeDetail, EditWorkHistoryModal's stageOptions already
+// keeps an entry's own stage selectable even once it's no longer in
+// `productionStages`, same as any other retired stage), they just can no
+// longer be logged fresh. The one place the old label still needs special
+// handling is "did this panel ship" — without it, a panel that was already
+// completed under the old combined step would wrongly stop counting as
+// shipped the moment this split goes live.
+const LEGACY_SHIP_STAGE_LABEL = "QC/Wrap";
+export function isShippedSessionRow(h) {
+  return !!h.taskCompleted && (h.stage === SHIP_STAGE_LABEL || h.stage === LEGACY_SHIP_STAGE_LABEL);
+}
 
 function stageStatsFromRows(rows, stage) {
   const stageRows = rows.filter((h) => h.stage === stage.label);
@@ -551,24 +569,23 @@ export function computeTeamStageStats(workHistory) {
 }
 
 // "Start to finish" build-time projections — for every build that's
-// actually shipped (a QC/Wrap row on file with taskCompleted true, same
-// definition Reports.jsx's "Panels Shipped" stat uses, just checked per
-// build instead of counted across all of them), sums every hour logged
-// against that exact (panel id, buildId) across every stage it went
-// through — Panel Prep through QC/Wrap, plus any Rework/sub-assembly/
-// Training time — the real total labor investment in that one panel, not
-// just one stage of it. Averaged across every shipped build, this answers
-// "how long does a panel really take, start to finish," for staffing and
-// scheduling projections. A build still in progress (no completed QC/Wrap
-// row yet) is excluded — its total would understate a real full build.
+// actually shipped (a Wrap row on file with taskCompleted true — or a
+// pre-split "QC/Wrap" row, see isShippedSessionRow above — same definition
+// Reports.jsx's "Panels Shipped" stat uses, just checked per build instead
+// of counted across all of them), sums every hour logged against that exact
+// (panel id, buildId) across every stage it went through — Panel Prep
+// through Wrap, plus any Rework/sub-assembly/Training time — the real total
+// labor investment in that one panel, not just one stage of it. Averaged
+// across every shipped build, this answers "how long does a panel really
+// take, start to finish," for staffing and scheduling projections. A build
+// still in progress (no completed Wrap row yet) is excluded — its total
+// would understate a real full build.
 export function computeAvgBuildTime(panels, workHistory) {
   const shipped = panels
     .map((panel) => ({ panel, stats: computeBuildStats(workHistory, panel) }))
     .filter(({ panel }) => {
       const tag = `#${panel.id}`;
-      return workHistory.some(
-        (h) => h.panel === tag && h.buildId === panel.buildId && h.stage === SHIP_STAGE_LABEL && h.taskCompleted
-      );
+      return workHistory.some((h) => h.panel === tag && h.buildId === panel.buildId && isShippedSessionRow(h));
     });
 
   if (shipped.length === 0) {
