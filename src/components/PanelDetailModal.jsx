@@ -16,6 +16,7 @@ import {
 } from "../data/mockData";
 import { getPdfBlob } from "../data/pdfStore";
 import { Modal, Button, RoleBadge, formatNumber, formatDate, formatTimeRange } from "./ui";
+import EditWorkHistoryModal from "./EditWorkHistoryModal";
 
 const SIZE_PRESETS = [
   { label: "Small", inches: 1 },
@@ -63,6 +64,7 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
   const [showPrint, setShowPrint] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [endingSession, setEndingSession] = useState(null);
+  const [editingEntry, setEditingEntry] = useState(null);
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -241,7 +243,12 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
       ) : (
         <div className="space-y-1.5 max-h-52 overflow-y-auto scrollbar-thin pr-1">
           {completed.map((h) => (
-            <div key={h.id} className="flex items-start justify-between text-[12px]">
+            <button
+              key={h.id}
+              onClick={() => setEditingEntry(h)}
+              title="Click to edit this session"
+              className="flex items-start justify-between text-[12px] w-full text-left rounded-md px-1.5 py-1 -mx-1.5 hover:bg-brand-50/60 transition-colors"
+            >
               <span className="text-ink-700">
                 <span className="font-medium text-ink-900">{h.employee?.name ?? "Unknown"}</span> added{" "}
                 <span className="font-semibold">+{h.percentAdded}%</span> to {h.stage ?? "a task"}
@@ -251,7 +258,7 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
                 {h.date}
                 <div className="text-[10px]">{formatTimeRange(h.startedAt, h.endedAt)}</div>
               </span>
-            </div>
+            </button>
           ))}
         </div>
       )}
@@ -282,6 +289,13 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
       )}
       {endingSession && (
         <EndSessionModal activeSession={endingSession} now={now} onClose={() => setEndingSession(null)} />
+      )}
+      {editingEntry && (
+        <EditWorkHistoryModal
+          entry={editingEntry}
+          employeeName={editingEntry.employee?.name ?? "Unknown employee"}
+          onClose={() => setEditingEntry(null)}
+        />
       )}
     </Modal>
   );
