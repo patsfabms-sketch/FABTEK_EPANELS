@@ -38,27 +38,48 @@ export default function Home() {
   const [clockError, setClockError] = useState("");
   const [clockResult, setClockResult] = useState(null);
 
+  // The "how much progress did you make?" prompt shown before the QR
+  // scanner opens whenever they tap Clock Out with an active session — see
+  // the button's onClick below. clockOutPercent holds what they picked
+  // (null = not answered yet) so it can ride along into clockScan once the
+  // clock-out QR is actually scanned.
+  const [showClockStopPrompt, setShowClockStopPrompt] = useState(false);
+  const [clockOutPercent, setClockOutPercent] = useState(null);
+
   const clockedIn = isClockedIn(clockLog, currentUser.id);
   const openClockEntry = clockLog.find((c) => c.employeeId === currentUser.id && !c.clockedOutAt);
+
+  // Same "remaining %, in 10% steps, plus a Task Complete shortcut" shape
+  // ActiveSession.jsx's own Stop Session prompt uses — kept in sync with
+  // that pattern intentionally, since this is the same decision (how much
+  // progress on the active session) just triggered from a different place.
+  const clockOutRemaining = session.active ? 100 - session.startingProgress : 0;
+  const clockOutOptions = [];
+  for (let p = 10; p <= clockOutRemaining; p += 10) clockOutOptions.push(p);
+  if (clockOutRemaining > 0 && !clockOutOptions.includes(clockOutRemaining)) clockOutOptions.push(clockOutRemaining);
 
   function closeClockScanner() {
     setShowClockScanner(false);
     setClockError("");
     setClockScanAttempt(0);
+    setClockOutPercent(null);
   }
 
   // Called with the raw string decoded off the shop's shared clock QR (see
   // mockData.clockQrValue/parseClockQrValue) — toggles clock in/out for
-  // whoever is signed in on this phone via AppContext.clockScan, which also
-  // auto-ends any panel session they forgot to stop when clocking out.
+  // whoever is signed in on this phone via AppContext.clockScan. Clocking
+  // out also auto-ends any panel session still running for them — if they
+  // had one, clockOutPercent is whatever they just reported on the prompt
+  // below, so it gets logged as real progress rather than silently zeroed.
   function handleClockDetect(raw) {
-    const result = clockScan(raw);
+    const result = clockScan(raw, clockOutPercent !== null ? { percentAdded: clockOutPercent } : {});
     if (!result.ok) {
       setClockError(result.error);
       setClockScanAttempt((n) => n + 1); // remounts QrScanner so it can detect again
       return;
     }
     setClockResult(result);
+    setClockOutPercent(null);
     closeClockScanner();
   }
 
@@ -135,7 +156,9 @@ export default function Home() {
             {clockResult.type === "in"
               ? "Clocked in — have a good shift!"
               : clockResult.autoEndedSessions > 0
-                ? `Clocked out — ${clockResult.hours} hrs recorded. ${clockResult.autoEndedSessions} session${clockResult.autoEndedSessions === 1 ? "" : "s"} you hadn't stopped ${clockResult.autoEndedSessions === 1 ? "was" : "were"} auto-ended and flagged for your manager to review.`
+                ? clockResult.autoEndedFlagged > 0
+                  ? `Clocked out — ${clockResult.hours} hrs recorded. ${clockResult.autoEndedSessions} session${clockResult.autoEndedSessions === 1 ? "" : "s"} you hadn't stopped ${clockResult.autoEndedSessions === 1 ? "was" : "were"} auto-ended — ${clockResult.autoEndedFlagged} flagged for your manager to review.`
+                  : `Clocked out — ${clockResult.hours} hrs recorded. Your active session was ended and logged with the progress you reported.`
                 : `Clocked out — ${clockResult.hours} hrs recorded. See you next shift!`}
           </p>
           <button onClick={() => setClockResult(null)} className="text-brand-600 text-sm leading-none shrink-0">
@@ -157,6 +180,15 @@ export default function Home() {
           variant={clockedIn ? "danger" : "primary"}
           className="shrink-0"
           onClick={() => {
+            // Clocking out while an active session is still running needs a
+            // progress report first — see the prompt below — before we let
+            // them scan out and auto-end it. Clocking in, or clocking out
+            // with nothing active, goes straight to the scanner as before.
+            if (clockedIn && session.active) {
+              setClockOutPercent(clockOutRemaining <= 0 ? 0 : null);
+              setShowClockStopPrompt(true);
+              return;
+            }
             setClockError("");
             setClockScanAttempt(0);
             setShowClockScanner(true);
@@ -360,10 +392,85 @@ export default function Home() {
             </p>
             <p className="text-[11px] text-ink-500 mb-4">
               Point your camera at the clock QR code posted at the shop entrance.
-              {clockedIn && " Any panel session you forgot to stop will be ended automatically."}
+              {clockedIn &&
+                (clockOutPercent !== null
+                  ? " Your active session will be ended and logged with the progress you just reported."
+                  : " Any panel session you forgot to stop will be ended automatically.")}
             </p>
             <QrScanner key={clockScanAttempt} onDetect={handleClockDetect} onCancel={closeClockScanner} />
             {clockError && <p className="text-[11px] text-bad-600 mt-3">{clockError}</p>}
+          </div>
+        </div>
+      )}
+
+      {showClockStopPrompt && (
+        <div className="fixed inset-0 z-20 bg-black/40 flex items-end justify-center" onClick={() => setShowClockStopPrompt(false)}>
+          <div className="w-full max-w-[400px] bg-white rounded-t-2xl p-5 pb-8" onClick={(e) => e.stopPropagation()}>
+            <div className="w-10 h-1 rounded-full bg-paper-200 mx-auto mb-4" />
+            <p className="text-sm font-semibold text-ink-900 mb-1">Before you clock out — how much progress did you make?</p>
+            <p className="text-[11px] text-ink-500 mb-4">
+              You still have an active session on Panel {session.panel}
+              {session.stage ? ` · ${session.stage}` : ""}. This task was {session.startingProgress}% done before your
+              session — estimate how much further you got, in 10% steps. Clocking out will end this session and log it.
+            </p>
+
+            {clockOutRemaining <= 0 ? (
+              <p className="text-[11px] text-ink-500 bg-paper-50 border border-paper-200 rounded-lg px-3 py-2.5 mb-4">
+                This task was already at 100% — there's no progress left to add. Your time will still be logged.
+              </p>
+            ) : (
+              <div className="grid grid-cols-4 gap-2 mb-4">
+                {clockOutOptions.map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => setClockOutPercent(p)}
+                    className={`rounded-lg border px-2 py-2.5 text-sm font-semibold ${
+                      clockOutPercent === p
+                        ? "border-brand-500 bg-brand-50 text-brand-700"
+                        : "border-paper-200 text-ink-900 hover:border-brand-400"
+                    }`}
+                  >
+                    +{p}%
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {clockOutRemaining > 0 && (
+              <button
+                onClick={() => setClockOutPercent(clockOutRemaining)}
+                className={`w-full rounded-lg border px-3 py-2.5 text-sm font-semibold mb-4 ${
+                  clockOutPercent === clockOutRemaining
+                    ? "border-good-500 bg-good-50 text-good-700"
+                    : "border-good-200 text-good-600 hover:border-good-400"
+                }`}
+              >
+                ✓ Task Complete (+{clockOutRemaining}%)
+              </button>
+            )}
+
+            {clockOutPercent !== null && (
+              <p className="text-[11px] text-ink-500 mb-3 text-center">
+                Task will be at{" "}
+                <span className="font-semibold text-ink-900">
+                  {Math.min(100, session.startingProgress + clockOutPercent)}%
+                </span>{" "}
+                after this session.
+              </p>
+            )}
+
+            <Button
+              className="w-full py-3"
+              disabled={clockOutPercent === null}
+              onClick={() => {
+                setShowClockStopPrompt(false);
+                setClockError("");
+                setClockScanAttempt(0);
+                setShowClockScanner(true);
+              }}
+            >
+              Confirm &amp; Continue to Clock Out
+            </Button>
           </div>
         </div>
       )}

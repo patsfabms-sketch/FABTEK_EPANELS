@@ -961,13 +961,20 @@ export function AppProvider({ children }) {
   // mockData.js) — one code posted at the shop's clock-in point, scanned by
   // whoever is signed in on the phone doing the scanning. Toggles based on
   // whether this employee already has an open clockLog row: no open row ->
-  // clock in; an open row -> clock out. Clocking out is also the safety net
-  // for a forgotten "Stop Session": every active session still running for
-  // this employee gets auto-ended at the clock-out timestamp (accurate
-  // hours, since the scan itself is a real stop time) with 0% progress and
-  // status "Flagged", so the hours aren't lost but a manager knows to
-  // follow up on what was actually accomplished.
-  function clockScan(rawValue) {
+  // clock in; an open row -> clock out. Clocking out also auto-ends any
+  // panel session still running for this employee. `opts.percentAdded`
+  // (0-100 or null) is what the technician reported on the pre-clock-out
+  // progress prompt (Home.jsx's "how much progress did you make?" modal,
+  // shown before the QR scanner opens whenever they have an active
+  // session) — when present, it's credited to the session actually running
+  // on THIS device exactly like a normal Stop Session would (real
+  // percentAdded/connections/completion, "Verified" unless the reported
+  // connections/hour rate itself trips the same review threshold a normal
+  // Stop Session checks). Any OTHER still-open session for this employee
+  // (a stray from a different device, or one this device lost track of)
+  // has no progress info to go on and keeps the original safety-net
+  // treatment: 0% logged, "Flagged" for a manager to review.
+  function clockScan(rawValue, opts = {}) {
     const parsed = parseClockQrValue(rawValue);
     if (!parsed) return { ok: false, error: "That doesn't look like the shop's clock QR code." };
     if (!isValidClockWeek(parsed.weekKey)) {
@@ -996,13 +1003,37 @@ export function AppProvider({ children }) {
       .eq("id", openEntry.id)
       .then(reportResult);
 
+    const { percentAdded = null } = opts;
     const stuckSessions = activeSessions.filter((s) => s.employeeId === currentUserId);
+    let flaggedCount = 0;
     stuckSessions.forEach((s) => {
-      finalizeActiveSession(s, {
-        hours: Number((effectiveElapsedMs(s.startedAt, now) / 3600000).toFixed(2)),
-        percentAdded: 0,
-        status: "Flagged",
-      });
+      const hours = Number((effectiveElapsedMs(s.startedAt, now) / 3600000).toFixed(2));
+      const isThisDeviceSession =
+        session.active && s.panel === session.panel && s.stage === session.stage && s.buildId === session.buildId;
+
+      if (isThisDeviceSession && percentAdded !== null) {
+        const startingProgress = taskProgress(workHistory, s.panel, s.stage, s.buildId);
+        const pct = Math.max(0, Math.min(100 - startingProgress, Number(percentAdded) || 0));
+        const isComplete = startingProgress + pct >= 100;
+        const isConnectStage = s.stage === CONNECT_STAGE_LABEL;
+        const connectionsCredited =
+          isConnectStage && session.targetConnections ? Math.round((pct / 100) * session.targetConnections) : 0;
+        const rate = connectionsPerHour(connectionsCredited, hours);
+        const rateFlagged = rate !== null && rate > CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD;
+        finalizeActiveSession(s, {
+          hours,
+          percentAdded: pct,
+          taskCompleted: isComplete,
+          connectionsCredited,
+          status: rateFlagged ? "Flagged" : "Verified",
+        });
+        if (rateFlagged) flaggedCount++;
+      } else {
+        // No reported progress to credit (a stray session this clock-out
+        // wasn't prompted for) — same original safety-net treatment.
+        finalizeActiveSession(s, { hours, percentAdded: 0, status: "Flagged" });
+        flaggedCount++;
+      }
     });
     if (session.active) {
       setSession({
@@ -1019,12 +1050,18 @@ export function AppProvider({ children }) {
 
     logActivity(
       stuckSessions.length > 0
-        ? `clocked out — ${stuckSessions.length} session${stuckSessions.length === 1 ? "" : "s"} auto-ended and flagged for review`
+        ? `clocked out — ${stuckSessions.length} session${stuckSessions.length === 1 ? "" : "s"} auto-ended${flaggedCount > 0 ? ` (${flaggedCount} flagged for review)` : ""}`
         : "clocked out",
       "",
       { who: currentUser?.name ?? "Technician", kind: stuckSessions.length > 0 ? "verify" : "scan" }
     );
-    return { ok: true, type: "out", autoEndedSessions: stuckSessions.length, hours: grossHours };
+    return {
+      ok: true,
+      type: "out",
+      autoEndedSessions: stuckSessions.length,
+      autoEndedFlagged: flaggedCount,
+      hours: grossHours,
+    };
   }
 
   const employeesWithAttainment = useMemo(
