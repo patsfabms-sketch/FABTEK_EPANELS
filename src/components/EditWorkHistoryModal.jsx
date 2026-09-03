@@ -3,11 +3,18 @@ import { useApp } from "../context/AppContext";
 import {
   productionStages,
   CONNECT_STAGE_LABEL,
+  REWORK_STAGE_LABEL,
   taskProgress,
   connectionsPerHour,
   CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD,
 } from "../data/mockData";
 import { Modal, Button, formatTimeRange } from "./ui";
+
+// Same sentinel ActiveSession.jsx's Stop Session flow uses for the
+// "Attributed to" picker — an explicit "not one person's error" answer,
+// distinct from not having picked anything, and stored as a real `null` on
+// save either way.
+const UNKNOWN_ATTRIBUTION = "unknown";
 
 // datetime-local inputs work in the browser's local time with no timezone
 // info in the string ("YYYY-MM-DDTHH:mm") — new Date() on a string like
@@ -37,7 +44,7 @@ function datetimeLocalToIso(value) {
 // same fields, same delete confirmation, regardless of where an admin
 // found the entry from.
 export default function EditWorkHistoryModal({ entry, employeeName, onClose }) {
-  const { updateWorkHistoryEntry, deleteWorkHistoryEntry, workHistory } = useApp();
+  const { updateWorkHistoryEntry, deleteWorkHistoryEntry, workHistory, employees } = useApp();
   const [date, setDate] = useState(entry.date || "");
   const [stage, setStage] = useState(entry.stage || "");
   const [hours, setHours] = useState(String(entry.hours ?? ""));
@@ -47,7 +54,18 @@ export default function EditWorkHistoryModal({ entry, employeeName, onClose }) {
   const [status, setStatus] = useState(entry.status || "Verified");
   const [startTime, setStartTime] = useState(isoToDatetimeLocal(entry.startedAt));
   const [endTime, setEndTime] = useState(isoToDatetimeLocal(entry.endedAt));
+  const [reworkReason, setReworkReason] = useState(entry.reworkReason || "");
+  const [reworkRootCause, setReworkRootCause] = useState(entry.reworkRootCause || "");
+  const [reworkAttributedTo, setReworkAttributedTo] = useState(
+    entry.reworkAttributedToId ?? (entry.stage === REWORK_STAGE_LABEL ? UNKNOWN_ATTRIBUTION : "")
+  );
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  // Rework's three fields only show/apply when the entry's (possibly just-
+  // edited) stage is Rework — matches ActiveSession.jsx's Stop Session gate,
+  // so an entry corrected INTO Rework here starts asking for them too, and
+  // one corrected OUT of Rework stops carrying stale rework details forward.
+  const isRework = stage === REWORK_STAGE_LABEL;
 
   // The stage dropdown is built from the current list of production stages —
   // but if this entry's stage is an older/renamed one that's no longer in
@@ -93,6 +111,9 @@ export default function EditWorkHistoryModal({ entry, employeeName, onClose }) {
       status,
       startedAt: datetimeLocalToIso(startTime),
       endedAt: datetimeLocalToIso(endTime),
+      reworkReason: isRework ? reworkReason.trim() || null : null,
+      reworkRootCause: isRework ? reworkRootCause.trim() || null : null,
+      reworkAttributedToId: isRework && reworkAttributedTo && reworkAttributedTo !== UNKNOWN_ATTRIBUTION ? reworkAttributedTo : null,
     });
     onClose();
   }
@@ -178,6 +199,45 @@ export default function EditWorkHistoryModal({ entry, employeeName, onClose }) {
           </option>
         ))}
       </select>
+
+      {isRework && (
+        <div className="rounded-lg bg-paper-50 border border-paper-200 px-3 py-3 mb-3">
+          <p className="text-[11px] font-semibold text-ink-700 mb-2">Rework details</p>
+
+          <label className="text-xs font-semibold text-ink-500">What needed to be reworked, and why</label>
+          <textarea
+            value={reworkReason}
+            onChange={(e) => setReworkReason(e.target.value)}
+            rows={2}
+            placeholder="Not recorded"
+            className="mt-1 mb-2 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm resize-none bg-white"
+          />
+
+          <label className="text-xs font-semibold text-ink-500">Root cause</label>
+          <textarea
+            value={reworkRootCause}
+            onChange={(e) => setReworkRootCause(e.target.value)}
+            rows={2}
+            placeholder="Not recorded"
+            className="mt-1 mb-2 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm resize-none bg-white"
+          />
+
+          <label className="text-xs font-semibold text-ink-500">Attributed to</label>
+          <select
+            value={reworkAttributedTo}
+            onChange={(e) => setReworkAttributedTo(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm bg-white"
+          >
+            <option value="">Not recorded</option>
+            {employees.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.name}
+              </option>
+            ))}
+            <option value={UNKNOWN_ATTRIBUTION}>Unknown / not one person's error</option>
+          </select>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div>

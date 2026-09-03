@@ -11,6 +11,7 @@ import {
   taskProgress,
   unitLabel,
   CONNECT_STAGE_LABEL,
+  REWORK_STAGE_LABEL,
   connectionsPerHour,
   CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD,
 } from "../data/mockData";
@@ -247,17 +248,25 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
               key={h.id}
               onClick={() => setEditingEntry(h)}
               title="Click to edit this session"
-              className="flex items-start justify-between text-[12px] w-full text-left rounded-md px-1.5 py-1 -mx-1.5 hover:bg-brand-50/60 transition-colors"
+              className="flex flex-col w-full text-left text-[12px] rounded-md px-1.5 py-1 -mx-1.5 hover:bg-brand-50/60 transition-colors"
             >
-              <span className="text-ink-700">
-                <span className="font-medium text-ink-900">{h.employee?.name ?? "Unknown"}</span> added{" "}
-                <span className="font-semibold">+{h.percentAdded}%</span> to {h.stage ?? "a task"}
-                {h.taskCompleted && <span className="text-good-600 font-semibold"> (completed)</span>}
+              <span className="flex items-start justify-between w-full">
+                <span className="text-ink-700">
+                  <span className="font-medium text-ink-900">{h.employee?.name ?? "Unknown"}</span> added{" "}
+                  <span className="font-semibold">+{h.percentAdded}%</span> to {h.stage ?? "a task"}
+                  {h.taskCompleted && <span className="text-good-600 font-semibold"> (completed)</span>}
+                </span>
+                <span className="text-ink-400 shrink-0 ml-2 text-right">
+                  {h.date}
+                  <div className="text-[10px]">{formatTimeRange(h.startedAt, h.endedAt)}</div>
+                </span>
               </span>
-              <span className="text-ink-400 shrink-0 ml-2 text-right">
-                {h.date}
-                <div className="text-[10px]">{formatTimeRange(h.startedAt, h.endedAt)}</div>
-              </span>
+              {h.stage === REWORK_STAGE_LABEL && h.reworkReason && (
+                <span className="text-[11px] text-warn-600 mt-0.5">
+                  Rework: {h.reworkReason}
+                  {h.reworkRootCause ? ` — root cause: ${h.reworkRootCause}` : ""}
+                </span>
+              )}
             </button>
           ))}
         </div>

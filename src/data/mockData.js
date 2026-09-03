@@ -485,6 +485,7 @@ export const productionStages = [
   { key: "subbuild", label: "Agastat Sub. Assm." },
   { key: "auxpanel", label: "Aux Panel Build" },
   { key: "auxswitch", label: "Aux Switch Assm." },
+  { key: "relay", label: "Relay Panel Build" },
   // Not a real panel-build step like the others, but uses the exact same
   // scan-a-panel-and-log-a-session flow (see AppContext.startSession) — a
   // technician being trained scans in against whatever panel the training
@@ -528,6 +529,17 @@ const LEGACY_SHIP_STAGE_LABEL = "QC/Wrap";
 export function isShippedSessionRow(h) {
   return !!h.taskCompleted && (h.stage === SHIP_STAGE_LABEL || h.stage === LEGACY_SHIP_STAGE_LABEL);
 }
+
+// Key of the "Rework" stage — the one stage where stopping a session
+// requires a short explanation of what went wrong (see ActiveSession.jsx's
+// Stop Session flow), rather than just a progress percentage. Rework is
+// meant to be a paper trail, not just logged time: every reworked entry
+// records why it's being reworked, the root cause, and who the original
+// work is attributed to (or "Unknown / not attributable to one person"),
+// so the shop can spot a recurring root cause or a training gap instead of
+// only ever seeing that rework happened.
+export const REWORK_STAGE_KEY = "rework";
+export const REWORK_STAGE_LABEL = productionStages.find((s) => s.key === REWORK_STAGE_KEY)?.label;
 
 function stageStatsFromRows(rows, stage) {
   const stageRows = rows.filter((h) => h.stage === stage.label);

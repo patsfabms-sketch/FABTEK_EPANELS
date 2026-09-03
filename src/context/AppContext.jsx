@@ -6,6 +6,7 @@ import {
   taskProgress,
   generateUsername,
   CONNECT_STAGE_LABEL,
+  REWORK_STAGE_LABEL,
   effectiveElapsedMs,
   parseClockQrValue,
   isValidClockWeek,
@@ -152,6 +153,9 @@ function toDbWorkHistory(h) {
     status: h.status,
     started_at: h.startedAt ?? null,
     ended_at: h.endedAt ?? null,
+    rework_reason: h.reworkReason ?? null,
+    rework_root_cause: h.reworkRootCause ?? null,
+    rework_attributed_to_id: h.reworkAttributedToId ?? null,
   };
 }
 // Partial-update mapper for correcting an existing row — see
@@ -172,6 +176,9 @@ const WORKHISTORY_FIELD_MAP = {
   status: "status",
   startedAt: "started_at",
   endedAt: "ended_at",
+  reworkReason: "rework_reason",
+  reworkRootCause: "rework_root_cause",
+  reworkAttributedToId: "rework_attributed_to_id",
 };
 function toDbWorkHistoryFields(fields) {
   const out = {};
@@ -208,6 +215,13 @@ function fromDbWorkHistory(row) {
     // happened. Null on any entry logged before this field existed.
     startedAt: row.started_at ?? null,
     endedAt: row.ended_at ?? null,
+    // Populated only for Rework-stage entries (see ActiveSession.jsx's Stop
+    // Session flow, which requires all three before a Rework session can be
+    // stopped) — null on every other stage, and on any Rework entry logged
+    // before this requirement existed.
+    reworkReason: row.rework_reason ?? null,
+    reworkRootCause: row.rework_root_cause ?? null,
+    reworkAttributedToId: row.rework_attributed_to_id ?? null,
   };
 }
 
@@ -1130,8 +1144,18 @@ export function AppProvider({ children }) {
   // actual scan-in/scan-out session. For the Route/Terminate stage
   // specifically, the percentage reported converts directly into a
   // connection count against the panel's target.
-  function stopSession(percentAdded) {
+  //
+  // opts.reworkReason/reworkRootCause/reworkAttributedToId: only meaningful
+  // when session.stage is the Rework stage — ActiveSession.jsx's Stop
+  // Session flow requires all three before it will even call this for a
+  // Rework session, so it can enforce that requirement in the UI (disabled
+  // Confirm button) rather than here. stopSession itself doesn't re-enforce
+  // it — same trust boundary as percentAdded, which the caller already
+  // clamps before calling this.
+  function stopSession(percentAdded, opts = {}) {
     if (!session.active) return;
+    const { reworkReason = null, reworkRootCause = null, reworkAttributedToId = null } = opts;
+    const isReworkStage = session.stage === REWORK_STAGE_LABEL;
     // Paid break windows (9:15–9:30, 11:00–11:30, 3:15–3:30 every day) are
     // never counted as logged work — effectiveElapsedMs subtracts whatever
     // portion of this session's wall-clock span fell inside one, regardless
@@ -1176,6 +1200,9 @@ export function AppProvider({ children }) {
       // hours math and the displayed end time never drift apart.
       startedAt: new Date(session.startedAt).toISOString(),
       endedAt: new Date(stoppedAt).toISOString(),
+      reworkReason: isReworkStage ? reworkReason : null,
+      reworkRootCause: isReworkStage ? reworkRootCause : null,
+      reworkAttributedToId: isReworkStage ? reworkAttributedToId : null,
     };
     setWorkHistory((prev) => [entry, ...prev]);
     supabase.from("assemblyos_work_history").insert(toDbWorkHistory(entry)).then(reportResult);

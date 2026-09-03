@@ -2,15 +2,34 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
 import { Button, formatNumber } from "../../components/ui";
-import { unitLabel, effectiveElapsedMs } from "../../data/mockData";
+import { unitLabel, effectiveElapsedMs, REWORK_STAGE_LABEL } from "../../data/mockData";
+
+// Sentinel for the "Attributed To" picker below — distinct from an unset
+// (not-yet-chosen) selection, "unknown" is an explicit, deliberate answer
+// meaning rework isn't attributable to one person's error (a supplied part
+// was bad, a spec changed, damage in handling, etc.), and translates to a
+// real `null` on the saved entry so it isn't confused with "nobody has
+// answered this yet."
+const UNKNOWN_ATTRIBUTION = "unknown";
 
 export default function ActiveSession() {
-  const { session, setSessionNotes, stopSession, panels } = useApp();
+  const { session, setSessionNotes, stopSession, panels, employees } = useApp();
   const activePanel = panels.find((p) => `#${p.id}` === session.panel && p.buildId === session.buildId);
   const navigate = useNavigate();
   const [elapsed, setElapsed] = useState(0);
   const [showStopModal, setShowStopModal] = useState(false);
   const [percentAdded, setPercentAdded] = useState(null);
+
+  // Only asked for — and only required — when this session's stage is
+  // Rework. Pat's request: before a Rework session can be logged out of,
+  // capture why it's being reworked, the root cause, and who the original
+  // work is attributed to, so this is a paper trail a shop can actually
+  // learn from (a recurring root cause, a training gap) instead of just
+  // logged hours with no context.
+  const isRework = session.stage === REWORK_STAGE_LABEL;
+  const [reworkReason, setReworkReason] = useState("");
+  const [reworkRootCause, setReworkRootCause] = useState("");
+  const [reworkAttributedTo, setReworkAttributedTo] = useState(""); // "" = not yet chosen
 
   // Shows the same break-adjusted time that will actually get logged when
   // this session stops (see effectiveElapsedMs) — so a technician working
@@ -48,11 +67,25 @@ export default function ActiveSession() {
     // Nothing left to add if the task was already at 100% when this session
     // started — pre-select 0% so Confirm isn't stuck disabled with no options.
     setPercentAdded(remaining <= 0 ? 0 : null);
+    setReworkReason("");
+    setReworkRootCause("");
+    setReworkAttributedTo("");
     setShowStopModal(true);
   }
 
+  // Rework's three fields are required in addition to the usual progress
+  // pick — same "disabled until answered" pattern the percent-progress
+  // buttons already use, just with more to fill in before this unlocks.
+  const reworkFieldsComplete =
+    !isRework || (reworkReason.trim() !== "" && reworkRootCause.trim() !== "" && reworkAttributedTo !== "");
+  const canConfirm = percentAdded !== null && reworkFieldsComplete;
+
   function confirmStop() {
-    stopSession(percentAdded ?? 0);
+    stopSession(percentAdded ?? 0, {
+      reworkReason: isRework ? reworkReason.trim() : null,
+      reworkRootCause: isRework ? reworkRootCause.trim() : null,
+      reworkAttributedToId: isRework && reworkAttributedTo !== UNKNOWN_ATTRIBUTION ? reworkAttributedTo : null,
+    });
     navigate("/mobile");
   }
 
@@ -182,7 +215,52 @@ export default function ActiveSession() {
               </p>
             )}
 
-            <Button className="w-full py-3" disabled={percentAdded === null} onClick={confirmStop}>
+            {isRework && (
+              <div className="border-t border-paper-100 pt-4 mt-1 mb-4">
+                <p className="text-sm font-semibold text-ink-900 mb-1">Rework details</p>
+                <p className="text-[11px] text-ink-500 mb-3">
+                  Required before this rework session can be logged out — helps the shop spot a recurring root
+                  cause instead of just seeing that rework happened.
+                </p>
+
+                <label className="text-xs font-semibold text-ink-500">What needed to be reworked, and why</label>
+                <textarea
+                  value={reworkReason}
+                  onChange={(e) => setReworkReason(e.target.value)}
+                  rows={2}
+                  placeholder="e.g. 3 terminations failed continuity test — wires re-landed"
+                  className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm resize-none"
+                />
+
+                <label className="text-xs font-semibold text-ink-500">Root cause</label>
+                <textarea
+                  value={reworkRootCause}
+                  onChange={(e) => setReworkRootCause(e.target.value)}
+                  rows={2}
+                  placeholder="e.g. wrong wire gauge pulled from the cart"
+                  className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm resize-none"
+                />
+
+                <label className="text-xs font-semibold text-ink-500">Attributed to</label>
+                <select
+                  value={reworkAttributedTo}
+                  onChange={(e) => setReworkAttributedTo(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm bg-white"
+                >
+                  <option value="" disabled>
+                    Select…
+                  </option>
+                  {employees.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.name}
+                    </option>
+                  ))}
+                  <option value={UNKNOWN_ATTRIBUTION}>Unknown / not one person's error</option>
+                </select>
+              </div>
+            )}
+
+            <Button className="w-full py-3" disabled={!canConfirm} onClick={confirmStop}>
               Confirm &amp; Stop Session
             </Button>
           </div>
