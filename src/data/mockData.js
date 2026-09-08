@@ -835,3 +835,31 @@ export function computeCostSummary(panels, workHistory, employees) {
     perPanel: perPanel.filter((p) => p.hours > 0).sort((a, b) => b.hours - a.hours),
   };
 }
+
+// The single "what are we actually paying, per hour, blended across the
+// shop" number the "Estimate a New Panel" calculator uses to turn its
+// estimated hours into an estimated labor cost. Computed the same honest
+// way as computeCostSummary's own per-panel labor cost (hours × that
+// technician's CURRENT pay rate, summed) — just rolled up across every
+// hour ever logged instead of one panel at a time, so someone who logs
+// more hours naturally weighs more in the blend (they're doing more of
+// the actual work), rather than averaging every employee's rate equally
+// regardless of how much they've actually worked. Returns
+// `blendedRate: null` (not a divide-by-zero) when nothing has been logged
+// yet — the calculator shows a "no history yet" note in that case instead
+// of a fabricated $0/hr estimate.
+export function computeBlendedLaborRate(workHistory, employees) {
+  const payRateById = new Map(employees.map((e) => [e.id, e.payRate || 0]));
+  let totalHours = 0;
+  let totalCost = 0;
+  workHistory.forEach((h) => {
+    const hours = h.hours || 0;
+    totalHours += hours;
+    totalCost += hours * (payRateById.get(h.employeeId) || 0);
+  });
+  return {
+    totalHours: Number(totalHours.toFixed(2)),
+    totalCost: Number(totalCost.toFixed(2)),
+    blendedRate: totalHours > 0 ? Number((totalCost / totalHours).toFixed(2)) : null,
+  };
+}

@@ -17,6 +17,7 @@ import {
   computeEmployeeLeaderboard,
   computeRepeatBuildTrends,
   computeCostSummary,
+  computeBlendedLaborRate,
   computeNonProductiveSummary,
   computeAvgBuildTime,
   estimateBuildHours,
@@ -157,6 +158,11 @@ export default function Reports() {
   // a job's total labor cost doesn't mean much sliced to "the last 7 days."
   const repeatBuilds = useMemo(() => computeRepeatBuildTrends(panels, workHistory), [panels, workHistory]);
   const costSummary = useMemo(() => computeCostSummary(panels, workHistory, employees), [panels, workHistory, employees]);
+  // Same all-time reasoning as costSummary just above — the blended $/hr
+  // rate the "Estimate a New Panel" calculator uses to turn its hours
+  // estimate into a cost estimate shouldn't jump around with whatever date
+  // range happens to be selected on the page right now.
+  const blendedLaborRate = useMemo(() => computeBlendedLaborRate(workHistory, employees), [workHistory, employees]);
 
   // Start-to-finish build-time projections and the build-time calculator
   // below both deliberately use ALL logged history, not filteredHistory —
@@ -186,6 +192,13 @@ export default function Reports() {
       ),
     [allTimeStageStats, routingKeys, estimateConnections, avgBuildTime.hoursPerConnection]
   );
+  // Estimated hours × the shop's blended $/hr (see computeBlendedLaborRate)
+  // — null (not a fabricated $0) until there's at least some logged history
+  // to blend a rate from.
+  const estimatedLaborCost =
+    blendedLaborRate.blendedRate !== null
+      ? Number((buildEstimate.totalHours * blendedLaborRate.blendedRate).toFixed(2))
+      : null;
   function toggleRoutingStage(key) {
     setRoutingKeys((prev) => {
       const next = new Set(prev);
@@ -419,10 +432,23 @@ export default function Reports() {
             className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
           />
 
-          <div className="rounded-lg bg-brand-50 border border-brand-100 px-3 py-3 mb-2">
-            <p className="text-[11px] font-semibold text-brand-700">Estimated Build Time</p>
-            <p className="text-2xl font-bold text-brand-700">{buildEstimate.totalHours} hrs</p>
+          <div className="grid grid-cols-2 gap-2 mb-2">
+            <div className="rounded-lg bg-brand-50 border border-brand-100 px-3 py-3">
+              <p className="text-[11px] font-semibold text-brand-700">Estimated Build Time</p>
+              <p className="text-2xl font-bold text-brand-700">{buildEstimate.totalHours} hrs</p>
+            </div>
+            <div className="rounded-lg bg-good-50 border border-good-100 px-3 py-3">
+              <p className="text-[11px] font-semibold text-good-700">Estimated Labor Cost</p>
+              <p className="text-2xl font-bold text-good-700">
+                {estimatedLaborCost !== null ? formatCurrency(estimatedLaborCost) : "—"}
+              </p>
+            </div>
           </div>
+          <p className="text-[11px] text-ink-400 mb-3">
+            {blendedLaborRate.blendedRate !== null
+              ? `Labor cost = estimated hours × $${blendedLaborRate.blendedRate}/hr — the shop's blended pay rate, from $${blendedLaborRate.totalCost.toFixed(2)} paid across ${blendedLaborRate.totalHours} logged hours to date. This is labor only — it doesn't include materials, overhead, or margin.`
+              : "No logged hours on file yet to blend a shop-wide $/hr rate from, so a labor cost estimate isn't shown."}
+          </p>
           {buildEstimate.breakdown.length === 0 ? (
             <p className="text-[11px] text-ink-400">Check at least one stage above to see an estimate.</p>
           ) : (
