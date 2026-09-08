@@ -481,6 +481,7 @@ export const productionStages = [
   { key: "test", label: "Continuity Test" },
   { key: "qc", label: "QC" },
   { key: "wrap", label: "Wrap" },
+  { key: "label", label: "Labeling" },
   { key: "rework", label: "Rework" },
   { key: "subbuild", label: "Agastat Sub. Assm." },
   { key: "auxpanel", label: "Aux Panel Build" },
