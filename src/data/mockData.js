@@ -738,6 +738,52 @@ export function isShippedSessionRow(h) {
   return !!h.taskCompleted && (h.stage === SHIP_STAGE_LABEL || h.stage === LEGACY_SHIP_STAGE_LABEL);
 }
 
+const QC_STAGE_LABEL = productionStages.find((s) => s.key === "qc")?.label;
+
+// Pat's question (Sept 23, looking at "Avg Panels Shipped / Day" on
+// Analytics): "if they are marked wrapped that means they are complete.
+// maybe they are not being marked as wrapped?" — checked directly against
+// the real logged data, and the answer was yes: several builds have a
+// *completed* QC session on file (sometimes QC re-verified a second time,
+// sometimes with Rework logged after it) but never got a completed Wrap
+// session logged at all, so they never count toward "shipped" even though
+// everything on file says they're done.
+//
+// This does NOT change what "shipped" means (see isShippedSessionRow's own
+// comment for why Wrap, not QC, is deliberately kept as this app's real
+// finish line — QC is a checkpoint before the panel is actually wrapped and
+// out the door, not the finish itself). What was missing was a way to
+// *find* the gap: every build that cleared a completed QC but has no
+// completed Wrap (or legacy combined "QC/Wrap") row on file at all —
+// surfaced so Pat can either log the Wrap scan that got missed, or confirm
+// the panel genuinely isn't done yet. Sorted oldest-activity-first, since a
+// build with real work logged well past QC and then nothing for weeks is
+// the most likely genuine "forgot to scan Wrap" case, versus one still
+// actively moving through rework/re-verification.
+export function computeMissingWrapPanels(panels, workHistory) {
+  const wrappedBuildIds = new Set(workHistory.filter(isShippedSessionRow).map((h) => h.buildId));
+  const qcDoneBuildIds = new Set(
+    workHistory.filter((h) => h.taskCompleted && h.stage === QC_STAGE_LABEL).map((h) => h.buildId)
+  );
+
+  return panels
+    .filter((panel) => qcDoneBuildIds.has(panel.buildId) && !wrappedBuildIds.has(panel.buildId))
+    .map((panel) => {
+      const timestamps = workHistory
+        .filter((h) => h.buildId === panel.buildId && h.createdAt)
+        .map((h) => new Date(h.createdAt).getTime())
+        .filter((t) => !Number.isNaN(t));
+      return {
+        buildId: panel.buildId,
+        id: panel.id,
+        jobNumber: panel.jobNumber,
+        customer: panel.customer,
+        lastActivityAt: timestamps.length ? Math.max(...timestamps) : null,
+      };
+    })
+    .sort((a, b) => (a.lastActivityAt ?? 0) - (b.lastActivityAt ?? 0));
+}
+
 // Key of the "Rework" stage — the one stage where stopping a session
 // requires a short explanation of what went wrong (see ActiveSession.jsx's
 // Stop Session flow), rather than just a progress percentage. Rework is

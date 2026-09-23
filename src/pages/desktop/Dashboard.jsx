@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
-import { productionStages, isClockedIn } from "../../data/mockData";
+import { productionStages, isClockedIn, computePanelsPerDayAvg, computeMissingWrapPanels } from "../../data/mockData";
 import { Card, SectionTitle, StatCard, RoleBadge, Modal, formatNumber } from "../../components/ui";
 
 const KIND_ICON = {
@@ -13,8 +13,9 @@ const KIND_ICON = {
 };
 
 export default function Dashboard() {
-  const { employees, activityFeed, activeSessions, workHistory, clockLog } = useApp();
+  const { employees, activityFeed, activeSessions, workHistory, clockLog, panels } = useApp();
   const [showClockModal, setShowClockModal] = useState(false);
+  const [showThroughputModal, setShowThroughputModal] = useState(false);
 
   const employeeById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
 
@@ -42,6 +43,23 @@ export default function Dashboard() {
     () => employees.filter((e) => !isClockedIn(clockLog, e.id)),
     [employees, clockLog]
   );
+
+  // Pat's request (Sept 23): "i want the panels per day should be at the
+  // top somewhere on the dashboard" — this was previously only on the
+  // Analytics page. Same all-time, shop-wide computation, just surfaced
+  // here too (same "Clocked In" duplication pattern already used above).
+  //
+  // Pat also questioned the number itself that day: "i also dont think
+  // that is accurate... if they are marked wrapped that means they are
+  // complete. maybe they are not being marked as wrapped?" — checked
+  // directly against the real data, and that's exactly right: several
+  // builds have real logged work well past QC (Rework, a second QC pass)
+  // with no Wrap session ever logged, so they never count as shipped even
+  // though everything on file says they're done. computeMissingWrapPanels
+  // finds that exact gap so it's fixable rather than just a lower-than-
+  // expected number with no explanation — see the throughput modal below.
+  const panelsPerDay = useMemo(() => computePanelsPerDayAvg(panels, workHistory), [panels, workHistory]);
+  const missingWrapPanels = useMemo(() => computeMissingWrapPanels(panels, workHistory), [panels, workHistory]);
 
   const pipelineCounts = useMemo(
     () =>
@@ -75,6 +93,16 @@ export default function Dashboard() {
       </div>
 
       <div className="flex flex-wrap gap-4 mb-6">
+        <Card onClick={() => setShowThroughputModal(true)} className="flex-1 min-w-[190px]">
+          <p className="text-xs font-medium text-ink-500">Avg Panels Shipped / Day</p>
+          <p className="text-2xl font-bold mt-1 text-brand-600">{panelsPerDay.avgPanelsPerDay ?? "—"}</p>
+          <p className="text-[11px] font-semibold mt-1">
+            <span className="text-ink-500">{panelsPerDay.shippedPanels} shipped all-time</span>
+            {missingWrapPanels.length > 0 && (
+              <span className="text-bad-600"> · {missingWrapPanels.length} may need a Wrap log — see why →</span>
+            )}
+          </p>
+        </Card>
         <StatCard label="Panels In Progress" value={stats.panelsInProgress} sub="Panels with someone scanned in" />
         <StatCard label="Completed Today" value={stats.completedToday} sub="Tasks finished today" />
         <StatCard
@@ -184,6 +212,14 @@ export default function Dashboard() {
           onClose={() => setShowClockModal(false)}
         />
       )}
+
+      {showThroughputModal && (
+        <ThroughputModal
+          panelsPerDay={panelsPerDay}
+          missingWrapPanels={missingWrapPanels}
+          onClose={() => setShowThroughputModal(false)}
+        />
+      )}
     </div>
   );
 }
@@ -283,6 +319,84 @@ function ClockedInModal({ clockLog, clockedInEmployees, notClockedInEmployees, o
             </div>
           ))}
         </div>
+      )}
+    </Modal>
+  );
+}
+
+// Drill-down behind the "Avg Panels Shipped / Day" tile — shows where the
+// number actually comes from (same "don't hand over a black-box number"
+// pattern as Reports.jsx's own stage/build-time drill-downs), and, since
+// Pat specifically questioned whether this number is accurate, surfaces the
+// real gap that was found: panels with a completed QC session but no
+// completed Wrap session ever logged, so they don't count as shipped even
+// though real work continued on them afterward.
+function ThroughputModal({ panelsPerDay, missingWrapPanels, onClose }) {
+  return (
+    <Modal onClose={onClose} widthClass="max-w-lg">
+      <div className="flex items-start justify-between mb-1">
+        <h3 className="text-base font-bold text-ink-900">Panel Throughput</h3>
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="text-ink-400 hover:text-ink-700 text-xl leading-none px-1"
+        >
+          ×
+        </button>
+      </div>
+      <p className="text-[11px] text-ink-500 mb-4">
+        {panelsPerDay.shippedPanels} panels shipped ÷ {panelsPerDay.daysSinceStart} days since the first logged
+        session ={" "}
+        <span className="font-semibold text-ink-700">{panelsPerDay.avgPanelsPerDay ?? "—"} panels/day</span>. A
+        panel only counts once it has a completed Wrap session on file — that's this app's one definition of
+        "actually shipped," the same one used everywhere else in the app, because QC is a checkpoint before a
+        panel is wrapped, not the finish line itself.
+      </p>
+
+      <p className="text-[11px] font-semibold text-ink-500 uppercase tracking-wide mb-2 pt-3 border-t border-paper-100">
+        Possibly Missing a Wrap Log ({missingWrapPanels.length})
+      </p>
+      {missingWrapPanels.length === 0 ? (
+        <p className="text-xs text-ink-400">
+          Every panel that's cleared QC also has a completed Wrap session on file — nothing looks stuck here.
+        </p>
+      ) : (
+        <>
+          <p className="text-[11px] text-ink-500 mb-2">
+            These passed QC but have no completed Wrap session logged — the most likely reason the number above
+            reads lower than what's actually gone out the door. Worth a look: if the panel really is done, whoever
+            wrapped it needs to scan it on the mobile app and log a Wrap session for real (there's no admin way to
+            fabricate one from here, on purpose — a session should mean someone actually did the work). If a Wrap
+            was scanned under the wrong stage by mistake, that entry can be corrected from Session Log instead.
+          </p>
+          <div className="space-y-1.5 max-h-56 overflow-y-auto scrollbar-thin pr-1">
+            {missingWrapPanels.map((p) => (
+              <div key={p.buildId} className="flex items-center justify-between rounded-lg px-2.5 py-2 bg-bad-50/50">
+                <div className="min-w-0">
+                  <p className="text-[13px] font-medium text-ink-900 truncate">
+                    Panel {p.id} {p.jobNumber ? `· Job #${p.jobNumber}` : ""}
+                  </p>
+                  <p className="text-[11px] text-ink-500 truncate">{p.customer || "No customer on file"}</p>
+                </div>
+                <span className="text-[11px] text-ink-500 shrink-0 ml-2 text-right">
+                  {p.lastActivityAt
+                    ? `Last activity ${new Date(p.lastActivityAt).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                      })}`
+                    : "No activity on file"}
+                </span>
+              </div>
+            ))}
+          </div>
+          <Link
+            to="/sessions"
+            onClick={onClose}
+            className="mt-3 inline-block text-xs font-semibold text-brand-600 hover:text-brand-700"
+          >
+            Open Session Log to check these panels' history →
+          </Link>
+        </>
       )}
     </Modal>
   );
