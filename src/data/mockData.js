@@ -738,6 +738,35 @@ export function isShippedSessionRow(h) {
   return !!h.taskCompleted && (h.stage === SHIP_STAGE_LABEL || h.stage === LEGACY_SHIP_STAGE_LABEL);
 }
 
+// Pat's request (Sept 23, Panels page): the "Scheduled Panels" list has no
+// concept of a panel ever leaving it once it's done — a build with no
+// active session sits there forever whether it's actually queued or it
+// shipped months ago, which is why that list kept growing ("mighty long").
+// This is the one place that decides "has this exact build actually gone
+// out the door," reusing the same isShippedSessionRow signal as everywhere
+// else in the app (Analytics build-time projections, the Dashboard
+// throughput tile, weekly P&L revenue recognition) — a Sent list built on a
+// second, different definition of "done" would just be a new way for the
+// numbers to disagree with each other. Returns the real clock time Wrap
+// finished (endedAt, Update 11) when available, falling back to the row's
+// createdAt for anything logged before that field existed. If more than one
+// completed Wrap row somehow exists on the same build (e.g. a corrected
+// re-log), the earliest is used — that's when the panel actually left, not
+// whenever it was most recently touched again afterward.
+export function sentInfoForBuild(workHistory, panel) {
+  const tag = `#${panel.id}`;
+  const wrapRows = workHistory.filter(
+    (h) => h.panel === tag && h.buildId === panel.buildId && isShippedSessionRow(h)
+  );
+  if (wrapRows.length === 0) return { isSent: false, sentAt: null };
+  const times = wrapRows
+    .map((h) => h.endedAt || h.createdAt)
+    .filter(Boolean)
+    .map((t) => new Date(t).getTime())
+    .filter((t) => !Number.isNaN(t));
+  return { isSent: true, sentAt: times.length ? Math.min(...times) : null };
+}
+
 const QC_STAGE_LABEL = productionStages.find((s) => s.key === "qc")?.label;
 
 // Pat's question (Sept 23, looking at "Avg Panels Shipped / Day" on

@@ -1,12 +1,29 @@
 import { useMemo, useState } from "react";
 import { useApp } from "../../context/AppContext";
-import { connectionsForPanel, taskProgress, currentBuilds, unitLabel } from "../../data/mockData";
-import { SectionTitle, formatNumber, formatDate } from "../../components/ui";
+import { connectionsForPanel, taskProgress, currentBuilds, unitLabel, sentInfoForBuild } from "../../data/mockData";
+import { StatCard, Tabs, formatNumber, formatDate, formatDateTime } from "../../components/ui";
 import PanelDetailModal from "../../components/PanelDetailModal";
 
+// Pat's request (Sept 23, sent with screenshots of the Dashboard's missing-
+// Wrap list): the "Scheduled Panels" section used to just mean "nobody's
+// currently scanned into this one" — which meant a panel that finished and
+// shipped months ago never left the list, it just sat there indistinguishable
+// from something actually still queued. That's why the list kept growing
+// ("that list is getting mighty long"). This page now splits into three tabs
+// — Active, Not Started, and a new Sent tab — driven by the same "has a
+// completed Wrap session been logged" signal used everywhere else in the app
+// (Analytics build-time projections, the Dashboard throughput tile, weekly
+// P&L). A panel only moves to Sent once a real Wrap scan is on file for it —
+// if a panel was physically sent out but never got scanned into Wrap (the
+// exact gap the Dashboard's "Avg Panels Shipped / Day" tile now finds), it
+// stays visible here until that scan is logged, which is the intended
+// behavior: this list and the shipped-count number should never disagree
+// about what's actually been marked done.
 export default function Panels() {
   const { panels, pricePerConnection, activeSessions, employees, workHistory } = useApp();
   const [selectedBuildId, setSelectedBuildId] = useState(null);
+  const [activeTab, setActiveTab] = useState("active");
+  const [query, setQuery] = useState("");
 
   const employeeById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
 
@@ -26,7 +43,8 @@ export default function Panels() {
     const completed = workHistory
       .filter((h) => h.panel === tag && h.buildId === p.buildId)
       .map((h) => ({ ...h, employee: employeeById.get(h.employeeId) }));
-    return { panel: p, target: connectionsForPanel(p, pricePerConnection), active, completed };
+    const { isSent, sentAt } = sentInfoForBuild(workHistory, p);
+    return { panel: p, target: connectionsForPanel(p, pricePerConnection), active, completed, isSent, sentAt };
   }
 
   // Only the current (most recent) build of each panel id is actionable —
@@ -38,9 +56,48 @@ export default function Panels() {
     [panels, activeSessions, workHistory, employeeById, pricePerConnection]
   );
 
-  const inProgress = panelGroups.filter((g) => g.active.length > 0);
-  const scheduled = panelGroups.filter((g) => g.active.length === 0);
-  const totalTechs = inProgress.reduce((s, g) => s + g.active.length, 0);
+  // "Active" keeps its original meaning — anyone currently scanned in,
+  // regardless of whether the build has also shipped before (e.g. rework
+  // reopened after Wrap) — so a technician genuinely on a panel right now
+  // never silently disappears from this tab just because it's technically
+  // already been marked Sent once.
+  const activeGroups = panelGroups.filter((g) => g.active.length > 0);
+  const sentGroups = useMemo(
+    () => panelGroups.filter((g) => g.isSent).sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0)),
+    [panelGroups]
+  );
+  // "Currently scheduled" (Pat's own term) = everything that hasn't shipped
+  // yet, whether or not it's actively being worked — this is the pipeline
+  // total the new stat tiles below are about.
+  const unsentGroups = panelGroups.filter((g) => !g.isSent);
+  const notStartedGroups = unsentGroups.filter((g) => g.active.length === 0);
+  const inProgressUnsentGroups = unsentGroups.filter((g) => g.active.length > 0);
+  const totalTechs = activeGroups.reduce((s, g) => s + g.active.length, 0);
+  const totalScheduledConnections = unsentGroups.reduce((s, g) => s + g.target, 0);
+
+  function filterGroups(list) {
+    const q = query.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter(
+      ({ panel }) =>
+        String(panel.jobNumber || panel.id).toLowerCase().includes(q) ||
+        String(panel.id).toLowerCase().includes(q) ||
+        (panel.customer || "").toLowerCase().includes(q) ||
+        (panel.poNumber || "").toLowerCase().includes(q)
+    );
+  }
+
+  const visibleGroups = useMemo(() => {
+    const base = activeTab === "active" ? activeGroups : activeTab === "sent" ? sentGroups : notStartedGroups;
+    return filterGroups(base);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, activeGroups, sentGroups, notStartedGroups, query]);
+
+  const tabs = [
+    { key: "active", label: "Active", badge: activeGroups.length },
+    { key: "not-started", label: "Not Started", badge: notStartedGroups.length },
+    { key: "sent", label: "Sent", badge: sentGroups.length },
+  ];
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto">
@@ -52,26 +109,80 @@ export default function Panels() {
           </p>
         </div>
         <span className="inline-flex items-center gap-1.5 rounded-full bg-good-50 text-good-600 text-xs font-semibold px-3 py-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-good-500 animate-pulse" /> {inProgress.length} panel
-          {inProgress.length === 1 ? "" : "s"} · {totalTechs} technician{totalTechs === 1 ? "" : "s"} active
+          <span className="w-1.5 h-1.5 rounded-full bg-good-500 animate-pulse" /> {activeGroups.length} panel
+          {activeGroups.length === 1 ? "" : "s"} · {totalTechs} technician{totalTechs === 1 ? "" : "s"} active
         </span>
       </div>
 
-      <SectionTitle title="Active Panels" subtitle="Panels with someone currently scanned in" />
-      <PanelTable groups={inProgress} emptyText="No panels currently in progress." onSelect={setSelectedBuildId} />
+      <div className="flex flex-wrap gap-4 mb-6">
+        <StatCard
+          label="Scheduled (Not Sent)"
+          value={formatNumber(unsentGroups.length)}
+          sub="In progress + not started"
+        />
+        <StatCard
+          label="Connections Scheduled"
+          value={formatNumber(totalScheduledConnections)}
+          sub="Across every unsent panel"
+        />
+        <StatCard
+          label="In Progress"
+          value={formatNumber(inProgressUnsentGroups.length)}
+          sub="Someone currently scanned in"
+          accent="text-good-600"
+        />
+        <StatCard
+          label="Not Started"
+          value={formatNumber(notStartedGroups.length)}
+          sub="Queued, no session yet"
+        />
+      </div>
 
-      <div className="mt-8">
-        <SectionTitle title="Scheduled Panels" subtitle="Panels queued for work — not yet scanned in" />
+      <Tabs tabs={tabs} active={activeTab} onChange={setActiveTab} />
+
+      <div className="flex flex-wrap gap-3 mb-4">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search job #, panel, customer, or PO…"
+          className="min-w-[240px] flex-1 rounded-lg border border-paper-200 bg-white px-3 py-2 text-[13px] text-ink-700"
+        />
+      </div>
+
+      {activeTab === "active" && (
         <PanelTable
-          groups={scheduled}
+          groups={visibleGroups}
+          emptyText={query ? "No active panels match this search." : "No panels currently in progress."}
+          onSelect={setSelectedBuildId}
+        />
+      )}
+
+      {activeTab === "not-started" && (
+        <PanelTable
+          groups={visibleGroups}
           emptyText={
-            panels.length === 0
+            query
+              ? "No not-started panels match this search."
+              : panels.length === 0
               ? "No panels yet — import a QuickBooks estimate on the Estimates page to add some."
-              : "All registered panels are currently in progress."
+              : "Every registered panel is either in progress or already sent."
           }
           onSelect={setSelectedBuildId}
         />
-      </div>
+      )}
+
+      {activeTab === "sent" && (
+        <PanelTable
+          groups={visibleGroups}
+          mode="sent"
+          emptyText={
+            query
+              ? "No sent panels match this search."
+              : "Nothing's been marked Sent yet — a panel lands here once a completed Wrap session is logged for it."
+          }
+          onSelect={setSelectedBuildId}
+        />
+      )}
 
       {selectedBuildId && (
         <PanelDetailModal
@@ -84,7 +195,7 @@ export default function Panels() {
   );
 }
 
-function PanelTable({ groups, emptyText, onSelect }) {
+function PanelTable({ groups, emptyText, onSelect, mode = "pipeline" }) {
   if (groups.length === 0) {
     return (
       <div className="rounded-xl2 bg-white border border-paper-200 shadow-card">
@@ -100,14 +211,14 @@ function PanelTable({ groups, emptyText, onSelect }) {
           <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
             <th className="px-4 py-3 font-semibold">Job #</th>
             <th className="px-4 py-3 font-semibold">Description</th>
-            <th className="px-4 py-3 font-semibold">Date Added</th>
+            <th className="px-4 py-3 font-semibold">{mode === "sent" ? "Sent" : "Date Added"}</th>
             <th className="px-4 py-3 font-semibold text-right">Connections</th>
             <th className="px-4 py-3 font-semibold">PO #</th>
-            <th className="px-4 py-3 font-semibold">Status</th>
+            {mode !== "sent" && <th className="px-4 py-3 font-semibold">Status</th>}
           </tr>
         </thead>
         <tbody>
-          {groups.map(({ panel, target, active, completed }) => (
+          {groups.map(({ panel, target, active, completed, sentAt }) => (
             <tr
               key={panel.buildId}
               onClick={() => onSelect(panel.buildId)}
@@ -125,22 +236,26 @@ function PanelTable({ groups, emptyText, onSelect }) {
                 <span className="font-medium text-ink-900">{panel.customer}</span>
                 {panel.order ? <span className="text-ink-500"> · {panel.order}</span> : null}
               </td>
-              <td className="px-4 py-3 text-ink-600 whitespace-nowrap">{formatDate(panel.dateAdded)}</td>
+              <td className="px-4 py-3 text-ink-600 whitespace-nowrap">
+                {mode === "sent" ? formatDateTime(sentAt) : formatDate(panel.dateAdded)}
+              </td>
               <td className="px-4 py-3 text-right font-semibold text-ink-900 whitespace-nowrap">
                 {formatNumber(target)}
               </td>
               <td className="px-4 py-3 text-ink-600 whitespace-nowrap">{panel.poNumber || "—"}</td>
-              <td className="px-4 py-3 whitespace-nowrap">
-                {active.length > 0 ? (
-                  <span className="inline-flex items-center gap-1.5 text-good-600 font-semibold">
-                    <span className="w-1.5 h-1.5 rounded-full bg-good-500 animate-pulse" /> {active.length} on it
-                  </span>
-                ) : completed.length > 0 ? (
-                  <span className="text-ink-500">{completed.length} logged</span>
-                ) : (
-                  <span className="text-ink-400">Scheduled</span>
-                )}
-              </td>
+              {mode !== "sent" && (
+                <td className="px-4 py-3 whitespace-nowrap">
+                  {active.length > 0 ? (
+                    <span className="inline-flex items-center gap-1.5 text-good-600 font-semibold">
+                      <span className="w-1.5 h-1.5 rounded-full bg-good-500 animate-pulse" /> {active.length} on it
+                    </span>
+                  ) : completed.length > 0 ? (
+                    <span className="text-ink-500">{completed.length} logged</span>
+                  ) : (
+                    <span className="text-ink-400">Scheduled</span>
+                  )}
+                </td>
+              )}
             </tr>
           ))}
         </tbody>

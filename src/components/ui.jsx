@@ -293,6 +293,17 @@ export function formatDate(iso) {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+// Date + time together, for a real moment-in-time value (a ms epoch number
+// or a full ISO timestamp string) — unlike formatDate above, which expects a
+// plain YYYY-MM-DD date-only string and would mangle a timestamp. Used
+// wherever "when exactly did this happen" matters, not just which day.
+export function formatDateTime(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
 // "What time to what time" for a logged session — startedAt/endedAt are
 // ISO timestamps stamped by AppContext (stopSession, finalizeActiveSession)
 // at the moment a session actually starts/stops. Entries logged before this
