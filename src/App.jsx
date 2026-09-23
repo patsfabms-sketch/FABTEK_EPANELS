@@ -3,6 +3,7 @@ import { AppProvider } from "./context/AppContext";
 import DesktopLayout from "./layouts/DesktopLayout";
 import MobileLayout from "./layouts/MobileLayout";
 import Dashboard from "./pages/desktop/Dashboard";
+import FloorStatus from "./pages/desktop/FloorStatus";
 import Reports from "./pages/desktop/Reports";
 import Goals from "./pages/desktop/Goals";
 import Team from "./pages/desktop/Team";
@@ -27,6 +28,7 @@ export default function App() {
 
           <Route element={<DesktopLayout />}>
             <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/floor-status" element={<FloorStatus />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/goals" element={<Goals />} />
             <Route path="/team" element={<Team />} />

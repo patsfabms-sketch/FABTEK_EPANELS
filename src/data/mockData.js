@@ -743,9 +743,14 @@ export function isShippedSessionRow(h) {
 // Stop Session flow), rather than just a progress percentage. Rework is
 // meant to be a paper trail, not just logged time: every reworked entry
 // records why it's being reworked, the root cause, and who the original
-// work is attributed to (or "Unknown / not attributable to one person"),
-// so the shop can spot a recurring root cause or a training gap instead of
-// only ever seeing that rework happened.
+// work is attributed to — a real person, always, so there's someone to
+// actually go ask what happened (see the "Attributed to" picker in
+// ActiveSession.jsx, which no longer offers an "Unknown" out for a
+// technician logging rework fresh; EditWorkHistoryModal's admin-correction
+// view still recognizes an "Unknown" value already saved on an older
+// entry, it just can't be chosen going forward), so the shop can spot a
+// recurring root cause or a training gap instead of only ever seeing that
+// rework happened.
 export const REWORK_STAGE_KEY = "rework";
 export const REWORK_STAGE_LABEL = productionStages.find((s) => s.key === REWORK_STAGE_KEY)?.label;
 
@@ -912,10 +917,18 @@ export function computeEmployeeInsights(workHistory, employeeId) {
 // the two. A stage nobody has cleared the minimum at yet doesn't appear on
 // the leaderboard at all, same "don't fabricate a ranking with no real
 // data behind it" rule the rest of this app already follows.
+//
+// Training is deliberately excluded — it isn't a production task with a
+// "who's best" answer (Pat's own words: "we do not need to put training in
+// there. because i mean, its training"), so it never produces a board here
+// even once technicians clear the session minimum on it.
+const LEADERBOARD_EXCLUDED_STAGE_KEYS = new Set(["training"]);
+
 export function computeStageLeaderboards(workHistory, employees, { minSessions = INSIGHT_MIN_SESSIONS } = {}) {
   const byStageKey = new Map();
   employees.forEach((emp) => {
     computeStageStats(workHistory, emp.id).forEach((s) => {
+      if (LEADERBOARD_EXCLUDED_STAGE_KEYS.has(s.key)) return;
       if (s.sessions < minSessions) return;
       if (!byStageKey.has(s.key)) byStageKey.set(s.key, []);
       byStageKey.get(s.key).push({
@@ -929,6 +942,7 @@ export function computeStageLeaderboards(workHistory, employees, { minSessions =
   });
 
   return productionStages
+    .filter((stage) => !LEADERBOARD_EXCLUDED_STAGE_KEYS.has(stage.key))
     .map((stage) => {
       const rows = byStageKey.get(stage.key);
       if (!rows || rows.length === 0) return null;
@@ -1022,6 +1036,44 @@ export function computeAvgBuildTime(panels, workHistory) {
         sessions: stats.sessions,
       }))
       .sort((a, b) => b.hours - a.hours),
+  };
+}
+
+// "How many panels are we getting out per day, on average, since the
+// beginning of this app" (Pat's own phrasing) — a single headline throughput
+// number for leadership, distinct from computeAvgBuildTime's per-panel hours
+// above. Panels enter the pipeline at different stages (a repeat build might
+// skip Prep, an in-flight job might have been imported mid-routing when this
+// app went live), so there's no single fair "day zero" to measure from on a
+// PER-PANEL basis. Instead the denominator is shop-wide: calendar days
+// elapsed since the very first workHistory row this app has on file at all
+// (i.e. since the shop actually started using it), and the numerator is
+// every panel that's shipped since then (same isShippedSessionRow/
+// SHIP_STAGE_LABEL "actually done" definition used everywhere else in this
+// file — QC/Wrap's pre-split legacy rows included). Floors the day count at
+// 1 so day one doesn't divide by zero or produce a misleadingly huge number.
+// Returns `avgPanelsPerDay: null` (not a fabricated 0) until there's at
+// least one logged session to measure a start date from at all.
+export function computePanelsPerDayAvg(panels, workHistory, { now = Date.now() } = {}) {
+  const timestamps = workHistory
+    .map((h) => h.createdAt)
+    .filter(Boolean)
+    .map((t) => new Date(t).getTime())
+    .filter((t) => !Number.isNaN(t));
+
+  if (timestamps.length === 0) {
+    return { shippedPanels: 0, daysSinceStart: 0, avgPanelsPerDay: null, startDate: null };
+  }
+
+  const startMs = Math.min(...timestamps);
+  const daysSinceStart = Math.max(1, Math.ceil((now - startMs) / 86400000));
+  const shippedBuildIds = new Set(workHistory.filter(isShippedSessionRow).map((h) => h.buildId));
+
+  return {
+    shippedPanels: shippedBuildIds.size,
+    daysSinceStart,
+    avgPanelsPerDay: Number((shippedBuildIds.size / daysSinceStart).toFixed(2)),
+    startDate: startMs,
   };
 }
 

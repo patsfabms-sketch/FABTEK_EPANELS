@@ -95,7 +95,8 @@ export default function Leaderboard() {
         board — one unusually fast or slow session shouldn't hand out (or bury) a rank. Route/Terminate is ranked by
         connections credited per hour, since that stage's session length depends on how big the panel was; every
         other stage is ranked by average hours per session, since there's no per-session size signal to account for
-        there. Ties are broken by whoever has logged more sessions at that stage.
+        there. Ties are broken by whoever has logged more sessions at that stage. Training isn't ranked here — it's
+        not a production task with a "best at it" answer.
       </p>
     </div>
   );

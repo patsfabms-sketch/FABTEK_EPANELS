@@ -11,6 +11,7 @@ import {
   computeFlaggedClockEntries,
   isLongClockEntry,
   LONG_CLOCK_ENTRY_HOURS,
+  productionStages,
   ROLES,
 } from "../../data/mockData";
 import { Card, SectionTitle, StatCard, RoleBadge, Avatar, Button, Tabs, formatTimeRange } from "../../components/ui";
@@ -61,6 +62,25 @@ export default function EmployeeDetail() {
   const recentActivity = useMemo(
     () => workHistory.filter((h) => h.employeeId === id),
     [workHistory, id]
+  );
+
+  // Task filter for the Sessions tab below — defaults to "All Tasks", which
+  // shows every logged session in the same chronological (most-recent-first)
+  // order it already comes in. Options are built from whichever stages this
+  // technician has actually logged, in productionStages' own order, with any
+  // older/retired stage label (e.g. a pre-split "QC/Wrap" row) tacked onto
+  // the end rather than silently hidden — same "keep a legacy stage
+  // selectable" treatment EditWorkHistoryModal's stage dropdown already uses.
+  const [sessionStageFilter, setSessionStageFilter] = useState("all");
+  const sessionStageOptions = useMemo(() => {
+    const present = new Set(recentActivity.map((h) => h.stage).filter(Boolean));
+    const ordered = productionStages.map((s) => s.label).filter((label) => present.has(label));
+    const extra = [...present].filter((label) => !ordered.includes(label));
+    return [...ordered, ...extra];
+  }, [recentActivity]);
+  const filteredActivity = useMemo(
+    () => (sessionStageFilter === "all" ? recentActivity : recentActivity.filter((h) => h.stage === sessionStageFilter)),
+    [recentActivity, sessionStageFilter]
   );
   const maxSessions = Math.max(...breakdown.map((b) => b.sessions), 1);
   const totalSessions = breakdown.reduce((s, b) => s + b.sessions, 0);
@@ -616,10 +636,31 @@ export default function EmployeeDetail() {
 
       {activeTab === "sessions" && (
         <>
-      <SectionTitle title="Recent Activity" subtitle="Logged sessions from the technician app" />
+      <SectionTitle
+        title="Recent Activity"
+        subtitle="Logged sessions from the technician app"
+        action={
+          recentActivity.length > 0 && (
+            <select
+              value={sessionStageFilter}
+              onChange={(e) => setSessionStageFilter(e.target.value)}
+              className="rounded-lg border border-paper-200 bg-white px-3 py-2 text-[13px] font-medium text-ink-700"
+            >
+              <option value="all">All Tasks</option>
+              {sessionStageOptions.map((label) => (
+                <option key={label} value={label}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          )
+        }
+      />
       <Card padded={false} className="overflow-x-auto">
         {recentActivity.length === 0 ? (
           <p className="text-xs text-ink-400 text-center py-8">No sessions logged yet for this technician.</p>
+        ) : filteredActivity.length === 0 ? (
+          <p className="text-xs text-ink-400 text-center py-8">No sessions logged for this task.</p>
         ) : (
           <table className="w-full text-[13px]">
             <thead>
@@ -634,7 +675,7 @@ export default function EmployeeDetail() {
               </tr>
             </thead>
             <tbody>
-              {recentActivity.map((h, i) => (
+              {filteredActivity.map((h, i) => (
                 <tr key={h.id} className={`border-b border-paper-100 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
                   <td className="px-4 py-2.5 text-ink-900 font-medium">
                     {h.date}

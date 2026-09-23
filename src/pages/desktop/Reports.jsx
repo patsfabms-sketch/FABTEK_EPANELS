@@ -20,6 +20,7 @@ import {
   computeBlendedLaborRate,
   computeNonProductiveSummary,
   computeAvgBuildTime,
+  computePanelsPerDayAvg,
   computeOvertimeCostByBuild,
   estimateBuildHours,
   isShippedSessionRow,
@@ -172,6 +173,14 @@ export default function Reports() {
   // something that jumps around depending on whatever date range happens
   // to be selected on the page right now.
   const avgBuildTime = useMemo(() => computeAvgBuildTime(panels, workHistory), [panels, workHistory]);
+  // The shop-wide throughput headline Pat asked for — "how many panels are
+  // we getting out per day, on average, since the beginning of this app" —
+  // same all-time reasoning as avgBuildTime just above, but denominated by
+  // calendar days since the shop's very first logged session rather than
+  // per-panel hours. See computePanelsPerDayAvg's own comment for why the
+  // denominator is shop-wide rather than per-panel (panels start at
+  // different stages, so there's no single fair "day zero" per panel).
+  const panelsPerDay = useMemo(() => computePanelsPerDayAvg(panels, workHistory), [panels, workHistory]);
   // Same all-time reasoning as avgBuildTime just above — which panels ran
   // into overtime, and how much it actually cost, is for pricing future
   // jobs, not something that should shrink to whatever date range is
@@ -403,11 +412,15 @@ export default function Reports() {
               <p className="text-[11px] font-semibold text-ink-500">Hrs / Connection</p>
               <p className="text-xl font-bold text-ink-900 mt-0.5">{avgBuildTime.hoursPerConnection ?? "—"}</p>
             </div>
+            <div>
+              <p className="text-[11px] font-semibold text-ink-500">Avg Panels Shipped / Day</p>
+              <p className="text-xl font-bold text-ink-900 mt-0.5">{panelsPerDay.avgPanelsPerDay ?? "—"}</p>
+            </div>
           </div>
           <p className="text-[11px] text-ink-400 mt-3 pt-3 border-t border-paper-100">
             {avgBuildTime.completedBuilds === 0
               ? `No panel has a completed ${SHIP_STAGE_LABEL} entry on file yet — projections need at least one fully shipped panel to compute from.`
-              : `"Avg Hours / Panel" sums every hour logged against a shipped panel across every stage it went through, then averages across all ${avgBuildTime.completedBuilds} shipped panel${avgBuildTime.completedBuilds === 1 ? "" : "s"} on file. Median is included alongside it since one unusually long or short build can pull the average around. "Hrs / Connection" is Route/Terminate hours only, divided by connections — the rate the calculator below uses.`}
+              : `"Avg Hours / Panel" sums every hour logged against a shipped panel across every stage it went through, then averages across all ${avgBuildTime.completedBuilds} shipped panel${avgBuildTime.completedBuilds === 1 ? "" : "s"} on file. Median is included alongside it since one unusually long or short build can pull the average around. "Hrs / Connection" is Route/Terminate hours only, divided by connections — the rate the calculator below uses. "Avg Panels Shipped / Day" is ${panelsPerDay.shippedPanels} shipped panel${panelsPerDay.shippedPanels === 1 ? "" : "s"} ÷ ${panelsPerDay.daysSinceStart} day${panelsPerDay.daysSinceStart === 1 ? "" : "s"} since the shop's very first logged session in this app — shop-wide throughput, not tied to any one panel's own start date, since panels enter the pipeline at different stages.`}
           </p>
         </Card>
 

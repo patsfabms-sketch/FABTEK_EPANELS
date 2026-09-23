@@ -4,13 +4,14 @@ import { useApp } from "../../context/AppContext";
 import { Button, formatNumber } from "../../components/ui";
 import { unitLabel, effectiveElapsedMs, REWORK_STAGE_LABEL } from "../../data/mockData";
 
-// Sentinel for the "Attributed To" picker below — distinct from an unset
-// (not-yet-chosen) selection, "unknown" is an explicit, deliberate answer
-// meaning rework isn't attributable to one person's error (a supplied part
-// was bad, a spec changed, damage in handling, etc.), and translates to a
-// real `null` on the saved entry so it isn't confused with "nobody has
-// answered this yet."
-const UNKNOWN_ATTRIBUTION = "unknown";
+// Rework's "Attributed to" picker used to offer an "Unknown / not one
+// person's error" option here. Pat's request: it should always name a real
+// person — "someone to go and ask what the deal was" — so a technician
+// logging rework fresh can no longer opt out of naming someone. (An older
+// entry that was already saved with no attribution, or with the old
+// Unknown answer, still displays and can be corrected via the admin
+// EditWorkHistoryModal, which keeps that option for exactly that legacy
+// case.)
 
 export default function ActiveSession() {
   const { session, setSessionNotes, stopSession, panels, employees } = useApp();
@@ -84,7 +85,7 @@ export default function ActiveSession() {
     stopSession(percentAdded ?? 0, {
       reworkReason: isRework ? reworkReason.trim() : null,
       reworkRootCause: isRework ? reworkRootCause.trim() : null,
-      reworkAttributedToId: isRework && reworkAttributedTo !== UNKNOWN_ATTRIBUTION ? reworkAttributedTo : null,
+      reworkAttributedToId: isRework ? reworkAttributedTo : null,
     });
     navigate("/mobile");
   }
@@ -242,6 +243,9 @@ export default function ActiveSession() {
                 />
 
                 <label className="text-xs font-semibold text-ink-500">Attributed to</label>
+                <p className="text-[10px] text-ink-400 mb-1">
+                  Name a real person — so there's always someone to go ask what happened.
+                </p>
                 <select
                   value={reworkAttributedTo}
                   onChange={(e) => setReworkAttributedTo(e.target.value)}
@@ -255,7 +259,6 @@ export default function ActiveSession() {
                       {e.name}
                     </option>
                   ))}
-                  <option value={UNKNOWN_ATTRIBUTION}>Unknown / not one person's error</option>
                 </select>
               </div>
             )}

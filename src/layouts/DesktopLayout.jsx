@@ -5,6 +5,7 @@ import { SaveErrorBanner, LoadingScreen } from "../components/ui";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: DashboardIcon },
+  { to: "/floor-status", label: "Floor Status", icon: FloorStatusIcon },
   { to: "/panels", label: "Panels", icon: PanelsIcon },
   { to: "/reports", label: "Analytics", icon: ReportsIcon },
   { to: "/goals", label: "Goals", icon: GoalsIcon },
@@ -98,6 +99,15 @@ function DashboardIcon(props) {
       <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
       <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
       <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" />
+    </svg>
+  );
+}
+function FloorStatusIcon(props) {
+  return (
+    <svg {...iconProps(props)}>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
+      <path d="M12 3.5v3M12 17.5v3M20.5 12h-3M6.5 12h-3" strokeLinecap="round" />
     </svg>
   );
 }
