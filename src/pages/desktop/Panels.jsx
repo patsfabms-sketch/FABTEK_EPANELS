@@ -9,9 +9,9 @@ import PanelDetailModal from "../../components/PanelDetailModal";
 // currently scanned into this one" — which meant a panel that finished and
 // shipped months ago never left the list, it just sat there indistinguishable
 // from something actually still queued. That's why the list kept growing
-// ("that list is getting mighty long"). This page now splits into three tabs
-// — Active, Not Started, and a new Sent tab — driven by the same "has a
-// completed Wrap session been logged" signal used everywhere else in the app
+// ("that list is getting mighty long"). This page splits into three tabs —
+// In Progress, Scheduled, and Sent — driven by the same "has a completed
+// Wrap session been logged" signal used everywhere else in the app
 // (Analytics build-time projections, the Dashboard throughput tile, weekly
 // P&L). A panel only moves to Sent once a real Wrap scan is on file for it —
 // if a panel was physically sent out but never got scanned into Wrap (the
@@ -19,10 +19,20 @@ import PanelDetailModal from "../../components/PanelDetailModal";
 // stays visible here until that scan is logged, which is the intended
 // behavior: this list and the shipped-count number should never disagree
 // about what's actually been marked done.
+//
+// Pat's follow-up (same day): "if someone logs a session on a panel then
+// technically it is in progress" — so In Progress vs. Scheduled is NOT
+// "someone's scanned in right this second" (that would flip a panel back to
+// looking un-started the moment the technician clocks out for lunch). It's
+// whether any real work has ever been logged on it at all: one or more
+// completed sessions, or someone actively on it right now. Scheduled means
+// truly untouched — zero sessions logged, nobody active. The header badge
+// at the top of the page still tracks who's scanned in *right now*
+// separately, for the "how many hands are on deck this second" read.
 export default function Panels() {
   const { panels, pricePerConnection, activeSessions, employees, workHistory } = useApp();
   const [selectedBuildId, setSelectedBuildId] = useState(null);
-  const [activeTab, setActiveTab] = useState("active");
+  const [activeTab, setActiveTab] = useState("in-progress");
   const [query, setQuery] = useState("");
 
   const employeeById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
@@ -56,23 +66,25 @@ export default function Panels() {
     [panels, activeSessions, workHistory, employeeById, pricePerConnection]
   );
 
-  // "Active" keeps its original meaning — anyone currently scanned in,
-  // regardless of whether the build has also shipped before (e.g. rework
-  // reopened after Wrap) — so a technician genuinely on a panel right now
-  // never silently disappears from this tab just because it's technically
-  // already been marked Sent once.
-  const activeGroups = panelGroups.filter((g) => g.active.length > 0);
+  // Who's actually scanned in RIGHT NOW, for the header badge only — kept
+  // separate from the In Progress tab below, which is about whether any
+  // work has ever been logged, not this exact instant.
+  const liveActiveGroups = panelGroups.filter((g) => g.active.length > 0);
+  const totalTechs = liveActiveGroups.reduce((s, g) => s + g.active.length, 0);
+
   const sentGroups = useMemo(
     () => panelGroups.filter((g) => g.isSent).sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0)),
     [panelGroups]
   );
   // "Currently scheduled" (Pat's own term) = everything that hasn't shipped
   // yet, whether or not it's actively being worked — this is the pipeline
-  // total the new stat tiles below are about.
+  // total the top stat tiles are about.
   const unsentGroups = panelGroups.filter((g) => !g.isSent);
-  const notStartedGroups = unsentGroups.filter((g) => g.active.length === 0);
-  const inProgressUnsentGroups = unsentGroups.filter((g) => g.active.length > 0);
-  const totalTechs = activeGroups.reduce((s, g) => s + g.active.length, 0);
+  // In Progress: any real work logged (completed sessions) OR someone
+  // actively on it right now. Scheduled: genuinely untouched — nothing
+  // logged, nobody active.
+  const inProgressGroups = unsentGroups.filter((g) => g.active.length > 0 || g.completed.length > 0);
+  const scheduledGroups = unsentGroups.filter((g) => g.active.length === 0 && g.completed.length === 0);
   const totalScheduledConnections = unsentGroups.reduce((s, g) => s + g.target, 0);
 
   function filterGroups(list) {
@@ -88,14 +100,14 @@ export default function Panels() {
   }
 
   const visibleGroups = useMemo(() => {
-    const base = activeTab === "active" ? activeGroups : activeTab === "sent" ? sentGroups : notStartedGroups;
+    const base = activeTab === "in-progress" ? inProgressGroups : activeTab === "sent" ? sentGroups : scheduledGroups;
     return filterGroups(base);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, activeGroups, sentGroups, notStartedGroups, query]);
+  }, [activeTab, inProgressGroups, sentGroups, scheduledGroups, query]);
 
   const tabs = [
-    { key: "active", label: "Active", badge: activeGroups.length },
-    { key: "not-started", label: "Not Started", badge: notStartedGroups.length },
+    { key: "in-progress", label: "In Progress", badge: inProgressGroups.length },
+    { key: "scheduled", label: "Scheduled", badge: scheduledGroups.length },
     { key: "sent", label: "Sent", badge: sentGroups.length },
   ];
 
@@ -109,32 +121,33 @@ export default function Panels() {
           </p>
         </div>
         <span className="inline-flex items-center gap-1.5 rounded-full bg-good-50 text-good-600 text-xs font-semibold px-3 py-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-good-500 animate-pulse" /> {activeGroups.length} panel
-          {activeGroups.length === 1 ? "" : "s"} · {totalTechs} technician{totalTechs === 1 ? "" : "s"} active
+          <span className="w-1.5 h-1.5 rounded-full bg-good-500 animate-pulse" /> {liveActiveGroups.length} panel
+          {liveActiveGroups.length === 1 ? "" : "s"} · {totalTechs} technician{totalTechs === 1 ? "" : "s"} scanned in
+          right now
         </span>
       </div>
 
       <div className="flex flex-wrap gap-4 mb-6">
         <StatCard
-          label="Scheduled (Not Sent)"
+          label="Unsent Panels"
           value={formatNumber(unsentGroups.length)}
-          sub="In progress + not started"
+          sub="In progress + scheduled"
         />
         <StatCard
-          label="Connections Scheduled"
+          label="Unsent Connections"
           value={formatNumber(totalScheduledConnections)}
           sub="Across every unsent panel"
         />
         <StatCard
           label="In Progress"
-          value={formatNumber(inProgressUnsentGroups.length)}
-          sub="Someone currently scanned in"
+          value={formatNumber(inProgressGroups.length)}
+          sub="Any work logged, or someone on it now"
           accent="text-good-600"
         />
         <StatCard
-          label="Not Started"
-          value={formatNumber(notStartedGroups.length)}
-          sub="Queued, no session yet"
+          label="Scheduled"
+          value={formatNumber(scheduledGroups.length)}
+          sub="Nothing logged yet"
         />
       </div>
 
@@ -149,23 +162,23 @@ export default function Panels() {
         />
       </div>
 
-      {activeTab === "active" && (
+      {activeTab === "in-progress" && (
         <PanelTable
           groups={visibleGroups}
-          emptyText={query ? "No active panels match this search." : "No panels currently in progress."}
+          emptyText={query ? "No in-progress panels match this search." : "No panels have any work logged yet."}
           onSelect={setSelectedBuildId}
         />
       )}
 
-      {activeTab === "not-started" && (
+      {activeTab === "scheduled" && (
         <PanelTable
           groups={visibleGroups}
           emptyText={
             query
-              ? "No not-started panels match this search."
+              ? "No scheduled panels match this search."
               : panels.length === 0
               ? "No panels yet — import a QuickBooks estimate on the Estimates page to add some."
-              : "Every registered panel is either in progress or already sent."
+              : "Every registered panel already has work logged or has shipped."
           }
           onSelect={setSelectedBuildId}
         />
