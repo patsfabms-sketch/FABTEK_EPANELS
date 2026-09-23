@@ -285,7 +285,7 @@ export function effectiveElapsedMs(startedAt, endedAt) {
 // `createdAt` (the real DB-assigned timestamp), not the `date` display
 // string, since `date` has no year in it — same reasoning as the trend
 // charts (see fromDbWorkHistory's comment on createdAt).
-function dayKeyFor(ts) {
+export function dayKeyFor(ts) {
   if (!ts) return null;
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return null;
@@ -391,6 +391,163 @@ export function computeNonProductiveSummary(workHistory, clockLog, employees) {
     totalCapacityHours,
     nonProductivePct: totalCapacityHours > 0 ? Math.round((totalNonProductiveHours / totalCapacityHours) * 100) : 0,
   };
+}
+
+// The current payroll-week view of Non-Productive Time on an employee's own
+// profile (EmployeeDetail.jsx) — Pat's correction to computeNonProductiveTime
+// above: that function returns "the last N days this person actually clocked
+// in," which is a rolling window that can reach back into the PRIOR payroll
+// week (e.g. on the very first day of a new week, the last-7-tracked-days
+// list was mostly last week's days). This instead always returns exactly the
+// 7 calendar days of ONE payroll week (Wednesday through the following
+// Tuesday — the same week payrollWeekRange/payrollWeekKey define), in
+// chronological order, so Wednesday is always first and the rest of the week
+// fills in below it day by day as the week actually happens — a day that
+// hasn't occurred yet (or has occurred but nothing was clocked in) is
+// `hasData: false` rather than being silently backfilled with an older day
+// from a different week.
+export function computeNonProductiveWeek(workHistory, clockLog, employeeId, { weekStart, now = Date.now() } = {}) {
+  const start = weekStart ?? payrollWeekStart(new Date(now)).getTime();
+  const byDayKey = new Map(computeNonProductiveTime(workHistory, clockLog, employeeId, { now }).map((d) => [d.dayKey, d]));
+
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const dayDate = new Date(start + i * 86400000);
+    const key = dayKeyFor(dayDate.getTime());
+    const existing = byDayKey.get(key);
+    days.push({
+      dayKey: key,
+      label: dayDate.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
+      hasOccurred: dayDate.getTime() <= now,
+      hasData: !!existing,
+      loggedHours: existing?.loggedHours ?? 0,
+      capacityHours: existing?.capacityHours ?? 0,
+      nonProductiveHours: existing?.nonProductiveHours ?? 0,
+    });
+  }
+  return days;
+}
+
+// Weekly non-productive totals for one technician, bucketed into the same
+// Wednesday-anchored payroll weeks as computeWeeklyPerformance/Payroll, most
+// recent week first, plus the average non-productive hours/week across
+// however many of those weeks have actually happened (capped at `weeks`) —
+// the trend Pat asked for once the day-by-day view got scoped down to just
+// the current, mostly-blank week: a single week in progress won't say much
+// on its own, so this is what shows whether non-productive time is
+// trending up, down, or holding steady week over week. A week with zero
+// tracked days simply doesn't appear, same "don't fabricate a week that
+// didn't happen" rule the rest of this feature already follows.
+export function computeNonProductiveWeeklyTrend(workHistory, clockLog, employeeId, { weeks = 8, now = Date.now() } = {}) {
+  const days = computeNonProductiveTime(workHistory, clockLog, employeeId, { now });
+  const buckets = new Map();
+  days.forEach((d) => {
+    const dayDate = new Date(`${d.dayKey}T00:00:00`);
+    if (Number.isNaN(dayDate.getTime())) return;
+    const weekKey = payrollWeekKey(dayDate);
+    if (!buckets.has(weekKey)) {
+      buckets.set(weekKey, {
+        weekKey,
+        weekStart: payrollWeekStart(dayDate).getTime(),
+        nonProductiveHours: 0,
+        capacityHours: 0,
+        loggedHours: 0,
+        daysTracked: 0,
+      });
+    }
+    const b = buckets.get(weekKey);
+    b.nonProductiveHours += d.nonProductiveHours;
+    b.capacityHours += d.capacityHours;
+    b.loggedHours += d.loggedHours;
+    b.daysTracked += 1;
+  });
+
+  const list = Array.from(buckets.values())
+    .filter((b) => b.weekStart <= now)
+    .map((b) => ({
+      ...b,
+      nonProductiveHours: Number(b.nonProductiveHours.toFixed(1)),
+      capacityHours: Number(b.capacityHours.toFixed(1)),
+      loggedHours: Number(b.loggedHours.toFixed(1)),
+    }))
+    .sort((a, b) => b.weekStart - a.weekStart)
+    .slice(0, weeks);
+
+  const avgNonProductiveHoursPerWeek = list.length
+    ? Number((list.reduce((s, w) => s + w.nonProductiveHours, 0) / list.length).toFixed(1))
+    : 0;
+
+  return { weeks: list, avgNonProductiveHoursPerWeek };
+}
+
+// ---------------------------------------------------------------------------
+// Clock entry review flags — a clock-in/out event worth a manager's second
+// look. Two independent reasons feed this: the geofencing check on the scan
+// itself (evaluateClockLocation, above) and simply being clocked in an
+// implausibly long time — Pat's rule: "if someone is clocked in for more
+// than 12 hrs it needs to be flagged and verified." Both reasons resolve the
+// same way an admin already resolves any other flagged thing in this app
+// (see workHistory.status "Flagged"/"Verified"): a human looks at it and
+// marks it Verified (see updateClockLogEntry in AppContext.jsx) — editing
+// the clock-in/out time to something that's no longer 12+ hours also
+// resolves the long-duration reason on its own, since that reason is
+// computed fresh from the (corrected) timestamps, not stored.
+export const LONG_CLOCK_ENTRY_HOURS = 12;
+
+// Raw gross duration for one clock entry, in hours — a still-open entry is
+// measured against `now` rather than left unbounded, same caution
+// computeNonProductiveTime already applies to an open clock entry.
+export function clockEntryDurationHours(entry, now = Date.now()) {
+  if (!entry?.clockedInAt) return 0;
+  const end = entry.clockedOutAt ?? now;
+  return Math.max(0, (end - entry.clockedInAt) / 3600000);
+}
+
+export function isLongClockEntry(entry, now = Date.now()) {
+  return clockEntryDurationHours(entry, now) > LONG_CLOCK_ENTRY_HOURS;
+}
+
+// Whether the geofencing check flagged either side of this entry's scan —
+// the same condition ClockLocationBadge already renders, pulled out here so
+// the flagging logic lives in one place instead of being re-derived in the
+// UI layer too.
+function hasLocationFlag(entry) {
+  const outApplies = entry.clockedOutAt && entry.outLocationFlagged !== null && entry.outLocationFlagged !== undefined;
+  return !!entry.inLocationFlagged || !!(outApplies && entry.outLocationFlagged);
+}
+
+// The single source of truth for "does this clock entry need a manager's
+// review right now" — true whenever it's a long entry or a location-flagged
+// one, AND nobody has verified it yet. Once `verified` is set, this always
+// returns false regardless of duration/location, exactly mirroring how a
+// workHistory entry's own Flagged status can be cleared by an admin without
+// having to change anything else about the entry.
+export function isClockEntryFlagged(entry, now = Date.now()) {
+  if (entry?.verified) return false;
+  return isLongClockEntry(entry, now) || hasLocationFlag(entry);
+}
+
+// Human-readable reason(s) a flagged clock entry is flagged, for display on
+// the Flagged tab / edit modal — a flagged entry can have more than one
+// reason at once (e.g. clocked in 14 hrs AND the clock-out scan was off-site).
+export function clockEntryFlagReasons(entry, now = Date.now()) {
+  const reasons = [];
+  if (isLongClockEntry(entry, now)) {
+    reasons.push(`Clocked in ${clockEntryDurationHours(entry, now).toFixed(1)} hrs — over the ${LONG_CLOCK_ENTRY_HOURS} hr review threshold`);
+  }
+  if (entry.inLocationFlagged) reasons.push("Clock-in location flagged");
+  const outApplies = entry.clockedOutAt && entry.outLocationFlagged !== null && entry.outLocationFlagged !== undefined;
+  if (outApplies && entry.outLocationFlagged) reasons.push("Clock-out location flagged");
+  return reasons;
+}
+
+// Every one of this employee's clock entries that currently needs review,
+// most recently clocked-in first — feeds the Flagged tab on their profile.
+export function computeFlaggedClockEntries(clockLog, employeeId, now = Date.now()) {
+  return clockLog
+    .filter((c) => c.employeeId === employeeId && isClockEntryFlagged(c, now))
+    .map((c) => ({ ...c, flagReasons: clockEntryFlagReasons(c, now) }))
+    .sort((a, b) => b.clockedInAt - a.clockedInAt);
 }
 
 // The string encoded into a panel's printed QR code. Kept as a single,

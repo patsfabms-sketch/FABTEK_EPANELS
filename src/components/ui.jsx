@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { ROLE_META } from "../data/mockData";
 import { getPhotoUrl } from "../data/photoStore";
 
@@ -119,6 +119,51 @@ export function Tabs({ tabs, active, onChange }) {
         );
       })}
     </div>
+  );
+}
+
+// Privacy shield for a sensitive figure shown in a table or list — pay
+// rate on the Team roster, so far. Renders masked ("••••••") by default;
+// press-and-hold the small eye icon to reveal it for as long as it's held,
+// release (or the pointer leaving the button) to mask it again — never a
+// toggle that stays revealed, since the point is a shoulder-surfing
+// screen for a shared/unlocked computer, not a one-time click-to-show.
+// `stopPropagation` on every pointer event here matters wherever this sits
+// inside a clickable row (e.g. Team.jsx's roster rows navigate to the
+// employee's profile on click) so pressing the eye never also fires the
+// row's own click.
+export function MaskedValue({ value }) {
+  const [revealed, setRevealed] = useState(false);
+  const show = (e) => {
+    e.stopPropagation();
+    setRevealed(true);
+  };
+  const hide = (e) => {
+    e?.stopPropagation();
+    setRevealed(false);
+  };
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className={revealed ? "" : "tracking-widest select-none"}>{revealed ? value : "••••••"}</span>
+      <button
+        type="button"
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={show}
+        onMouseUp={hide}
+        onMouseLeave={hide}
+        onTouchStart={show}
+        onTouchEnd={hide}
+        onTouchCancel={hide}
+        title="Press and hold to reveal"
+        aria-label={revealed ? "Pay rate revealed — release to hide" : "Press and hold to reveal"}
+        className={`shrink-0 rounded p-0.5 transition-colors ${revealed ? "text-brand-600" : "text-ink-300 hover:text-ink-500"}`}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" strokeLinecap="round" strokeLinejoin="round" />
+          <circle cx="12" cy="12" r="3" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+    </span>
   );
 }
 

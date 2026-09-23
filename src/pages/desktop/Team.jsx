@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import QRCode from "qrcode";
 import { useApp } from "../../context/AppContext";
 import { ROLES, ROLE_META, isClockedIn, isoWeekKey, clockQrValue, payrollWeekRange, clockedHoursInRange } from "../../data/mockData";
-import { Card, SectionTitle, RoleBadge, Button, Modal, Avatar } from "../../components/ui";
+import { Card, SectionTitle, RoleBadge, Button, Modal, Avatar, MaskedValue } from "../../components/ui";
 import EditTeamMemberModal from "../../components/EditTeamMemberModal";
 
 export default function Team() {
@@ -152,7 +152,9 @@ export default function Team() {
                 </td>
                 <td className="px-4 py-2.5 text-ink-600">{e.panel ?? "—"}</td>
                 <td className="px-4 py-2.5 text-ink-700 font-medium">{e.clockedThisWeek} hrs</td>
-                <td className="px-4 py-2.5 text-ink-700 font-medium">${e.payRate?.toFixed(2)}/hr</td>
+                <td className="px-4 py-2.5 text-ink-700 font-medium">
+                  <MaskedValue value={`$${e.payRate?.toFixed(2)}/hr`} />
+                </td>
                 <td className="px-4 py-2.5">
                   <div className="flex items-center justify-end gap-3">
                     <button

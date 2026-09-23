@@ -4,14 +4,19 @@ import { useApp } from "../../context/AppContext";
 import {
   computeStageStats,
   attainmentTone,
-  computeNonProductiveTime,
+  computeNonProductiveWeek,
+  computeNonProductiveWeeklyTrend,
   computeWeeklyPerformance,
   computeEmployeeInsights,
+  computeFlaggedClockEntries,
+  isLongClockEntry,
+  LONG_CLOCK_ENTRY_HOURS,
   ROLES,
 } from "../../data/mockData";
 import { Card, SectionTitle, StatCard, RoleBadge, Avatar, Button, Tabs, formatTimeRange } from "../../components/ui";
 import EditWorkHistoryModal from "../../components/EditWorkHistoryModal";
 import EditTeamMemberModal from "../../components/EditTeamMemberModal";
+import EditClockEntryModal from "../../components/EditClockEntryModal";
 
 const TONE_ACCENT = {
   good: "text-good-600",
@@ -26,6 +31,7 @@ export default function EmployeeDetail() {
 
   const employee = employees.find((e) => e.id === id);
   const [editingEntry, setEditingEntry] = useState(null);
+  const [editingClockEntry, setEditingClockEntry] = useState(null);
   const [editingProfile, setEditingProfile] = useState(false);
   // Tabbed layout so this page isn't one long scroll — each tab is a
   // self-contained "folder" of sections that used to just be stacked
@@ -62,20 +68,35 @@ export default function EmployeeDetail() {
 
   // Non-productive time — how much of this Panel Technician's actual
   // clocked-in time (from the shared Clock In/Out QR, below) wasn't covered
-  // by a logged session, day by day. See computeNonProductiveTime's own
-  // comment in mockData.js for how days are now driven by real clock-in
-  // data instead of a fixed shift window. Leads don't punch this same
-  // Clock In/Out QR flow today, so the section is skipped for them entirely.
-  const nonProductiveDays = useMemo(
-    () => (employee?.role === ROLES.TECH ? computeNonProductiveTime(workHistory, clockLog, employee.id) : []),
+  // by a logged session, day by day within THIS payroll week only (Wed–Tue)
+  // — Pat's correction to the old "last 7 tracked workdays" view, which
+  // could reach back into last week's days on, say, the very first day of a
+  // new week. Chronological (Wednesday first), so a day that hasn't
+  // happened yet — or happened but had no clock-in — just shows blank
+  // rather than being backfilled with an older day from a different week.
+  // Leads don't punch this same Clock In/Out QR flow today, so the section
+  // is skipped for them entirely.
+  const nonProductiveWeek = useMemo(
+    () => (employee?.role === ROLES.TECH ? computeNonProductiveWeek(workHistory, clockLog, employee.id) : []),
     [employee, workHistory, clockLog]
   );
-  const recentNonProductiveDays = nonProductiveDays.slice(0, 7);
-  const recentNonProductiveTotal = Number(recentNonProductiveDays.reduce((s, d) => s + d.nonProductiveHours, 0).toFixed(1));
-  const recentCapacityTotal = Number(recentNonProductiveDays.reduce((s, d) => s + d.capacityHours, 0).toFixed(1));
-  const recentNonProductivePct =
-    recentCapacityTotal > 0 ? Math.round((recentNonProductiveTotal / recentCapacityTotal) * 100) : 0;
-  const maxNonProductiveHours = Math.max(...recentNonProductiveDays.map((d) => d.nonProductiveHours), 1);
+  const trackedNonProductiveDays = nonProductiveWeek.filter((d) => d.hasData);
+  const nonProductiveWeekTotal = Number(trackedNonProductiveDays.reduce((s, d) => s + d.nonProductiveHours, 0).toFixed(1));
+  const nonProductiveWeekCapacity = Number(trackedNonProductiveDays.reduce((s, d) => s + d.capacityHours, 0).toFixed(1));
+  const nonProductiveWeekPct =
+    nonProductiveWeekCapacity > 0 ? Math.round((nonProductiveWeekTotal / nonProductiveWeekCapacity) * 100) : 0;
+  const maxNonProductiveHours = Math.max(...trackedNonProductiveDays.map((d) => d.nonProductiveHours), 1);
+
+  // The weekly trend/average Pat asked for once the day-by-day view above
+  // got scoped down to just the current (mostly blank, early in the week)
+  // payroll week — see computeNonProductiveWeeklyTrend's own comment.
+  const nonProductiveTrend = useMemo(
+    () =>
+      employee?.role === ROLES.TECH
+        ? computeNonProductiveWeeklyTrend(workHistory, clockLog, employee.id)
+        : { weeks: [], avgNonProductiveHoursPerWeek: 0 },
+    [employee, workHistory, clockLog]
+  );
 
   // Clock in/out history from the shared weekly clock QR (see the "Print
   // This Week's Clock QR" button on the Team page) — most recent first.
@@ -88,6 +109,14 @@ export default function EmployeeDetail() {
     [clockLog, id]
   );
   const openClockEntry = clockEvents.find((c) => !c.clockedOutAt);
+
+  // Clock entries needing a manager's review right now — a 12+ hour
+  // duration or a geofencing location flag, neither yet marked Verified.
+  // See computeFlaggedClockEntries's own comment; feeds the Flagged tab
+  // below alongside this employee's flagged logged sessions.
+  const flaggedClockEntries = useMemo(() => computeFlaggedClockEntries(clockLog, id), [clockLog, id]);
+  const flaggedSessions = useMemo(() => recentActivity.filter((h) => h.status === "Flagged"), [recentActivity]);
+  const flaggedCount = flaggedSessions.length + flaggedClockEntries.length;
 
   // Week-to-week performance — hours/sessions/connections logged per
   // payroll week (Wednesday–Tuesday, same week the Payroll page uses), most
@@ -126,6 +155,7 @@ export default function EmployeeDetail() {
     { key: "overview", label: "Overview" },
     { key: "performance", label: "Performance" },
     { key: "attendance", label: "Attendance" },
+    { key: "flagged", label: "Flagged", badge: flaggedCount },
     { key: "sessions", label: "Sessions", badge: recentActivity.length },
   ];
 
@@ -332,49 +362,95 @@ export default function EmployeeDetail() {
         <>
           <SectionTitle
             title="Non-Productive Time"
-            subtitle="Clocked-in time not covered by a logged session (paid breaks already excluded) — last 7 tracked workdays"
+            subtitle="Clocked-in time not covered by a logged session (paid breaks already excluded) — this payroll week (Wed–Tue)"
           />
           <Card className="mb-8">
-            {recentNonProductiveDays.length === 0 ? (
-              <p className="text-xs text-ink-400 text-center py-6">
-                No tracked workdays yet — this shows up once they've clocked in at least once via the Clock In/Out QR.
-              </p>
-            ) : (
-              <>
-                <div className="flex flex-wrap gap-4 mb-5">
-                  <StatCard
-                    label="Non-Productive"
-                    value={`${recentNonProductiveTotal} hrs`}
-                    sub={`${recentNonProductivePct}% of clocked-in time`}
-                    accent={recentNonProductivePct > 25 ? "text-bad-600" : recentNonProductivePct > 10 ? "text-warn-600" : "text-good-600"}
-                  />
-                  <StatCard label="Clocked-In Time" value={`${recentCapacityTotal} hrs`} sub={`${recentNonProductiveDays.length} workday(s) tracked`} />
+            <div className="flex flex-wrap gap-4 mb-5">
+              <StatCard
+                label="Non-Productive This Week"
+                value={`${nonProductiveWeekTotal} hrs`}
+                sub={
+                  trackedNonProductiveDays.length > 0
+                    ? `${nonProductiveWeekPct}% of clocked-in time so far`
+                    : "No clock-in yet this week"
+                }
+                accent={nonProductiveWeekPct > 25 ? "text-bad-600" : nonProductiveWeekPct > 10 ? "text-warn-600" : "text-good-600"}
+              />
+              <StatCard
+                label="Avg Non-Productive / Week"
+                value={`${nonProductiveTrend.avgNonProductiveHoursPerWeek} hrs`}
+                sub={
+                  nonProductiveTrend.weeks.length > 0
+                    ? `Over the last ${nonProductiveTrend.weeks.length} tracked week${nonProductiveTrend.weeks.length === 1 ? "" : "s"}`
+                    : "No tracked weeks yet"
+                }
+              />
+            </div>
+            <div className="space-y-3.5">
+              {nonProductiveWeek.map((d) => (
+                <div key={d.dayKey}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[13px] font-medium text-ink-900">{d.label}</span>
+                    <span className="text-[11px] text-ink-500">
+                      {d.hasData
+                        ? `${d.nonProductiveHours} hrs non-productive · ${d.loggedHours} hrs logged of ${d.capacityHours} hrs clocked in`
+                        : d.hasOccurred
+                          ? "No clock-in recorded"
+                          : "Hasn't happened yet"}
+                    </span>
+                  </div>
+                  <div className="h-2 rounded-full bg-paper-100 overflow-hidden">
+                    {d.hasData && (
+                      <div
+                        className="h-full rounded-full bg-warn-500"
+                        style={{ width: `${(d.nonProductiveHours / maxNonProductiveHours) * 100}%` }}
+                      />
+                    )}
+                  </div>
                 </div>
-                <div className="space-y-3.5">
-                  {recentNonProductiveDays.map((d) => (
-                    <div key={d.dayKey}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-[13px] font-medium text-ink-900">{d.label}</span>
-                        <span className="text-[11px] text-ink-500">
-                          {d.nonProductiveHours} hrs non-productive · {d.loggedHours} hrs logged of {d.capacityHours} hrs clocked in
-                        </span>
-                      </div>
-                      <div className="h-2 rounded-full bg-paper-100 overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-warn-500"
-                          style={{ width: `${(d.nonProductiveHours / maxNonProductiveHours) * 100}%` }}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <p className="text-[11px] text-ink-400 mt-4 pt-3 border-t border-paper-100">
-                  Only days with a recorded clock-in are shown — a day is only counted once they've actually scanned
-                  in, so a day they weren't scheduled to work never shows up as idle time.
-                </p>
-              </>
-            )}
+              ))}
+            </div>
+            <p className="text-[11px] text-ink-400 mt-4 pt-3 border-t border-paper-100">
+              Only this payroll week's days are shown, Wednesday through Tuesday — a day is blank until they've
+              actually clocked in on it, so an upcoming day in the week (or one they weren't scheduled to work)
+              never shows up as idle time.
+            </p>
           </Card>
+
+          {nonProductiveTrend.weeks.length > 0 && (
+            <>
+              <SectionTitle
+                title="Non-Productive Time — Weekly Trend"
+                subtitle="Same payroll weeks as Week-to-Week Performance — most recent first"
+              />
+              <Card padded={false} className="overflow-x-auto mb-8">
+                <table className="w-full text-[13px]">
+                  <thead>
+                    <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
+                      <th className="px-4 py-3 font-semibold">Payroll Week</th>
+                      <th className="px-4 py-3 font-semibold">Non-Productive</th>
+                      <th className="px-4 py-3 font-semibold">Clocked-In Time</th>
+                      <th className="px-4 py-3 font-semibold">% Non-Productive</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {nonProductiveTrend.weeks.map((w, i) => (
+                      <tr key={w.weekKey} className={`border-b border-paper-100 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
+                        <td className="px-4 py-2.5 text-ink-900 font-medium">
+                          Week of {new Date(w.weekStart).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                        </td>
+                        <td className="px-4 py-2.5 text-ink-700 font-medium">{w.nonProductiveHours} hrs</td>
+                        <td className="px-4 py-2.5 text-ink-700">{w.capacityHours} hrs</td>
+                        <td className="px-4 py-2.5 text-ink-700">
+                          {w.capacityHours > 0 ? `${Math.round((w.nonProductiveHours / w.capacityHours) * 100)}%` : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Card>
+            </>
+          )}
         </>
       )}
 
@@ -394,6 +470,7 @@ export default function EmployeeDetail() {
                 <th className="px-4 py-3 font-semibold">Clocked Out</th>
                 <th className="px-4 py-3 font-semibold">Hours</th>
                 <th className="px-4 py-3 font-semibold">Location</th>
+                <th className="px-4 py-3 font-semibold"></th>
               </tr>
             </thead>
             <tbody>
@@ -412,9 +489,22 @@ export default function EmployeeDetail() {
                       <span className="text-good-600 font-semibold">Still clocked in</span>
                     )}
                   </td>
-                  <td className="px-4 py-2.5 text-ink-700">{c.hours != null ? c.hours : "—"}</td>
+                  <td className="px-4 py-2.5 text-ink-700">
+                    {c.hours != null ? c.hours : "—"}
+                    {isLongClockEntry(c) && !c.verified && (
+                      <span className="block text-[10px] font-semibold text-bad-600">Needs review</span>
+                    )}
+                  </td>
                   <td className="px-4 py-2.5">
                     <ClockLocationBadge entry={c} />
+                  </td>
+                  <td className="px-4 py-2.5 text-right">
+                    <button
+                      onClick={() => setEditingClockEntry(c)}
+                      className="text-[11px] font-semibold text-brand-600 hover:text-brand-700"
+                    >
+                      Edit
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -422,6 +512,105 @@ export default function EmployeeDetail() {
           </table>
         )}
       </Card>
+        </>
+      )}
+
+      {activeTab === "flagged" && (
+        <>
+          <SectionTitle
+            title="Flagged Sessions"
+            subtitle="Logged sessions marked Flagged for review (an unusual connections/hour rate, or an admin-closed stuck session)"
+          />
+          <Card padded={false} className="overflow-x-auto mb-8">
+            {flaggedSessions.length === 0 ? (
+              <p className="text-xs text-ink-400 text-center py-8">No flagged sessions right now.</p>
+            ) : (
+              <table className="w-full text-[13px]">
+                <thead>
+                  <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
+                    <th className="px-4 py-3 font-semibold">Date</th>
+                    <th className="px-4 py-3 font-semibold">Panel</th>
+                    <th className="px-4 py-3 font-semibold">Task</th>
+                    <th className="px-4 py-3 font-semibold">Hours</th>
+                    <th className="px-4 py-3 font-semibold"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {flaggedSessions.map((h, i) => (
+                    <tr key={h.id} className={`border-b border-paper-100 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
+                      <td className="px-4 py-2.5 text-ink-900 font-medium">{h.date}</td>
+                      <td className="px-4 py-2.5 text-ink-600">
+                        {h.panel}
+                        {jobNumberByBuildId.get(h.buildId) && (
+                          <span className="text-ink-400"> · Job #{jobNumberByBuildId.get(h.buildId)}</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-ink-600">{h.stage ?? "—"}</td>
+                      <td className="px-4 py-2.5 text-ink-700">{h.hours}</td>
+                      <td className="px-4 py-2.5 text-right">
+                        <button
+                          onClick={() => setEditingEntry(h)}
+                          className="text-[11px] font-semibold text-brand-600 hover:text-brand-700"
+                        >
+                          Review
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Card>
+
+          <SectionTitle
+            title="Flagged Clock Entries"
+            subtitle={`Clocked in more than ${LONG_CLOCK_ENTRY_HOURS} hrs, or a location mismatch on the scan — not yet marked Verified`}
+          />
+          <Card padded={false} className="overflow-x-auto">
+            {flaggedClockEntries.length === 0 ? (
+              <p className="text-xs text-ink-400 text-center py-8">No flagged clock entries right now.</p>
+            ) : (
+              <table className="w-full text-[13px]">
+                <thead>
+                  <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
+                    <th className="px-4 py-3 font-semibold">Date</th>
+                    <th className="px-4 py-3 font-semibold">Clocked In</th>
+                    <th className="px-4 py-3 font-semibold">Clocked Out</th>
+                    <th className="px-4 py-3 font-semibold">Reason(s)</th>
+                    <th className="px-4 py-3 font-semibold"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {flaggedClockEntries.map((c, i) => (
+                    <tr key={c.id} className={`border-b border-paper-100 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
+                      <td className="px-4 py-2.5 text-ink-900 font-medium">
+                        {new Date(c.clockedInAt).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+                      </td>
+                      <td className="px-4 py-2.5 text-ink-700">
+                        {new Date(c.clockedInAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                      </td>
+                      <td className="px-4 py-2.5 text-ink-700">
+                        {c.clockedOutAt ? (
+                          new Date(c.clockedOutAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+                        ) : (
+                          <span className="text-good-600 font-semibold">Still clocked in</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-bad-600 text-[11px]">{c.flagReasons.join(" · ")}</td>
+                      <td className="px-4 py-2.5 text-right">
+                        <button
+                          onClick={() => setEditingClockEntry(c)}
+                          className="text-[11px] font-semibold text-brand-600 hover:text-brand-700"
+                        >
+                          Review
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Card>
         </>
       )}
 
@@ -493,6 +682,14 @@ export default function EmployeeDetail() {
           entry={editingEntry}
           employeeName={employee.name}
           onClose={() => setEditingEntry(null)}
+        />
+      )}
+
+      {editingClockEntry && (
+        <EditClockEntryModal
+          entry={editingClockEntry}
+          employeeName={employee.name}
+          onClose={() => setEditingClockEntry(null)}
         />
       )}
 

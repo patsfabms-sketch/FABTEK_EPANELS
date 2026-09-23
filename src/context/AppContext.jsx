@@ -259,6 +259,7 @@ function toDbClockLog(c) {
     out_lng: c.outLng ?? null,
     out_distance_ft: c.outDistanceFt ?? null,
     out_location_flagged: c.outLocationFlagged ?? null,
+    verified: c.verified ?? false,
   };
 }
 function fromDbClockLog(row) {
@@ -280,7 +281,37 @@ function fromDbClockLog(row) {
     outLng: row.out_lng === null || row.out_lng === undefined ? null : Number(row.out_lng),
     outDistanceFt: row.out_distance_ft === null || row.out_distance_ft === undefined ? null : Number(row.out_distance_ft),
     outLocationFlagged: row.out_location_flagged ?? null,
+    // Whether an admin has looked at and cleared this entry's review flag —
+    // see isClockEntryFlagged in mockData.js. Defaults false for every row
+    // (including everything logged before this field existed), which is the
+    // correct default: an old entry that happens to be 12+ hours long should
+    // surface for review same as a new one, not be silently pre-cleared.
+    verified: !!row.verified,
   };
+}
+
+// Partial-update mapper for correcting an existing clock entry — see
+// updateClockLogEntry below (EmployeeDetail.jsx's Clock In/Out History table
+// and Flagged tab). Deliberately narrower than the full toDbClockLog insert
+// mapper above: an admin correction only ever touches the clock-in/out times,
+// the recomputed gross hours that go with them, and the Verified flag — never
+// the geofencing fields, which are an honest record of what the original scan
+// actually saw and shouldn't be rewritten by a later correction.
+const CLOCKLOG_FIELD_MAP = {
+  clockedInAt: "clocked_in_at",
+  clockedOutAt: "clocked_out_at",
+  hours: "hours",
+  verified: "verified",
+};
+function toDbClockLogFields(fields) {
+  const out = {};
+  Object.entries(fields).forEach(([k, v]) => {
+    const col = CLOCKLOG_FIELD_MAP[k] ?? k;
+    if (k === "clockedInAt") out[col] = v ? new Date(v).toISOString() : null;
+    else if (k === "clockedOutAt") out[col] = v ? new Date(v).toISOString() : null;
+    else out[col] = v;
+  });
+  return out;
 }
 
 function fromDbActiveSession(row) {
@@ -917,6 +948,42 @@ export function AppProvider({ children }) {
     );
   }
 
+  // Admin correction for a clock-in/out event — for mishaps (forgot to scan
+  // in/out, scanned at the wrong time) and for resolving a flagged entry: a
+  // 12+ hour clock entry (see isClockEntryFlagged/LONG_CLOCK_ENTRY_HOURS in
+  // mockData.js) is flagged purely from its stored clocked-in/out times, so
+  // correcting those times to something under 12 hours clears the flag on
+  // its own; `verified` is there for the other case — the long duration was
+  // real (a genuine double shift) and just needs an admin's sign-off rather
+  // than a change to the times. See EmployeeDetail.jsx's Clock In/Out
+  // History table and its Flagged tab, both of which open the same edit
+  // modal on the same entry. Any subset of fields can be corrected; whatever
+  // isn't passed is left alone.
+  function updateClockLogEntry(entryId, fields) {
+    const before = clockLog.find((c) => c.id === entryId);
+    // Editing either timestamp recomputes the stored gross `hours` figure so
+    // it stays consistent with what the table actually displays — this is
+    // the same raw, no-break-subtracted duration toDbClockLog already
+    // computes on a normal clock-out (see its own comment), just re-derived
+    // here for a corrected pair of times instead of a live clock-out event.
+    let nextFields = fields;
+    if (before && (fields.clockedInAt !== undefined || fields.clockedOutAt !== undefined)) {
+      const clockedInAt = fields.clockedInAt !== undefined ? fields.clockedInAt : before.clockedInAt;
+      const clockedOutAt = fields.clockedOutAt !== undefined ? fields.clockedOutAt : before.clockedOutAt;
+      const hours =
+        clockedInAt && clockedOutAt ? Number((Math.max(0, clockedOutAt - clockedInAt) / 3600000).toFixed(2)) : null;
+      nextFields = { ...fields, hours };
+    }
+    setClockLog((prev) => prev.map((c) => (c.id === entryId ? { ...c, ...nextFields } : c)));
+    supabase.from("assemblyos_clock_log").update(toDbClockLogFields(nextFields)).eq("id", entryId).then(reportResult);
+    const emp = employees.find((e) => e.id === before?.employeeId);
+    logActivity(
+      `corrected a clock in/out entry for ${emp?.name ?? "a technician"}`,
+      before ? new Date(before.clockedInAt).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "",
+      { kind: "verify" }
+    );
+  }
+
   // Shared by adminEndSession and clockScan's auto-stop-on-clock-out safety
   // net — both need to turn one activeSessions row into a permanent
   // workHistory entry (or discard it outright) without going through the
@@ -1333,6 +1400,7 @@ export function AppProvider({ children }) {
     clockLog,
     clockScan,
     adminEndSession,
+    updateClockLogEntry,
     currentUser,
     admins,
     currentAdmin,
