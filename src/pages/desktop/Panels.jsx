@@ -195,7 +195,24 @@ export default function Panels() {
   );
 }
 
+function todayDateInputValue() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function PanelTable({ groups, emptyText, onSelect, mode = "pipeline" }) {
+  const { adminMarkPanelSent } = useApp();
+  const [confirmingBuildId, setConfirmingBuildId] = useState(null);
+  const [sentDate, setSentDate] = useState(todayDateInputValue());
+
+  function handleMarkSent(e, panel) {
+    e.stopPropagation();
+    // A blank/invalid date falls back to right now inside adminMarkPanelSent
+    // itself — never blocks the action.
+    adminMarkPanelSent(panel, { sentAt: sentDate ? `${sentDate}T12:00:00` : undefined });
+    setConfirmingBuildId(null);
+  }
+
   if (groups.length === 0) {
     return (
       <div className="rounded-xl2 bg-white border border-paper-200 shadow-card">
@@ -215,6 +232,7 @@ function PanelTable({ groups, emptyText, onSelect, mode = "pipeline" }) {
             <th className="px-4 py-3 font-semibold text-right">Connections</th>
             <th className="px-4 py-3 font-semibold">PO #</th>
             {mode !== "sent" && <th className="px-4 py-3 font-semibold">Status</th>}
+            {mode !== "sent" && <th className="px-4 py-3 font-semibold text-right"></th>}
           </tr>
         </thead>
         <tbody>
@@ -253,6 +271,50 @@ function PanelTable({ groups, emptyText, onSelect, mode = "pipeline" }) {
                     <span className="text-ink-500">{completed.length} logged</span>
                   ) : (
                     <span className="text-ink-400">Scheduled</span>
+                  )}
+                </td>
+              )}
+              {mode !== "sent" && (
+                <td
+                  onClick={(e) => e.stopPropagation()}
+                  className="px-4 py-3 whitespace-nowrap text-right"
+                >
+                  {confirmingBuildId === panel.buildId ? (
+                    <span className="inline-flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="date"
+                        value={sentDate}
+                        onChange={(e) => setSentDate(e.target.value)}
+                        title="Date this panel actually shipped"
+                        className="rounded border border-paper-200 px-1.5 py-0.5 text-[11px] text-ink-700"
+                      />
+                      <button
+                        onClick={(e) => handleMarkSent(e, panel)}
+                        className="text-[11px] font-semibold text-good-600 hover:text-good-700"
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setConfirmingBuildId(null);
+                        }}
+                        className="text-[11px] font-semibold text-ink-400 hover:text-ink-600"
+                      >
+                        Cancel
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirmingBuildId(panel.buildId);
+                      }}
+                      title="Log a completed Wrap for this panel without a real technician session — for a panel that's already physically shipped but was never scanned"
+                      className="text-[11px] font-semibold text-ink-400 hover:text-good-600"
+                    >
+                      Mark Sent
+                    </button>
                   )}
                 </td>
               )}

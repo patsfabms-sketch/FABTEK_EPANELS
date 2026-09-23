@@ -14,9 +14,10 @@ import {
   REWORK_STAGE_LABEL,
   connectionsPerHour,
   CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD,
+  sentInfoForBuild,
 } from "../data/mockData";
 import { getPdfBlob } from "../data/pdfStore";
-import { Modal, Button, RoleBadge, formatNumber, formatDate, formatTimeRange } from "./ui";
+import { Modal, Button, RoleBadge, formatNumber, formatDate, formatDateTime, formatTimeRange } from "./ui";
 import EditWorkHistoryModal from "./EditWorkHistoryModal";
 
 const SIZE_PRESETS = [
@@ -61,11 +62,16 @@ function formatElapsed(startedAt, now) {
 // immediately instead of only after the modal is closed and reopened.
 export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
   const navigate = useNavigate();
-  const { panels, workHistory, activeSessions, employees, pricePerConnection } = useApp();
+  const { panels, workHistory, activeSessions, employees, pricePerConnection, adminMarkPanelSent } = useApp();
   const [showPrint, setShowPrint] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [endingSession, setEndingSession] = useState(null);
   const [editingEntry, setEditingEntry] = useState(null);
+  const [confirmingMarkSent, setConfirmingMarkSent] = useState(false);
+  const [markSentDate, setMarkSentDate] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  });
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -100,6 +106,12 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
     .map((b) => ({ build: b, stats: computeBuildStats(workHistory, b) }))
     .sort((a, b) => (b.build.dateAdded || "").localeCompare(a.build.dateAdded || ""));
   const thisBuildStats = computeBuildStats(workHistory, panel);
+  const sentInfo = sentInfoForBuild(workHistory, panel);
+
+  function handleMarkSent() {
+    adminMarkPanelSent(panel, { sentAt: markSentDate ? `${markSentDate}T12:00:00` : undefined });
+    setConfirmingMarkSent(false);
+  }
 
   return (
     <Modal onClose={onClose} widthClass="max-w-2xl">
@@ -111,6 +123,11 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
             {unitLabel(panel) && (
               <span className="ml-2 inline-block rounded-full bg-brand-50 text-brand-700 text-[11px] font-semibold px-2 py-0.5 align-middle">
                 {unitLabel(panel)}
+              </span>
+            )}
+            {sentInfo.isSent && (
+              <span className="ml-2 inline-block rounded-full bg-good-50 text-good-600 text-[11px] font-semibold px-2 py-0.5 align-middle">
+                Sent {formatDateTime(sentInfo.sentAt)}
               </span>
             )}
           </h2>
@@ -252,8 +269,17 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
             >
               <span className="flex items-start justify-between w-full">
                 <span className="text-ink-700">
-                  <span className="font-medium text-ink-900">{h.employee?.name ?? "Unknown"}</span> added{" "}
-                  <span className="font-semibold">+{h.percentAdded}%</span> to {h.stage ?? "a task"}
+                  <span className="font-medium text-ink-900">
+                    {h.employee?.name ?? (h.loggedByAdmin ? "Admin — Marked Sent" : "Unknown")}
+                  </span>{" "}
+                  {h.loggedByAdmin ? (
+                    "logged"
+                  ) : (
+                    <>
+                      added <span className="font-semibold">+{h.percentAdded}%</span> to
+                    </>
+                  )}{" "}
+                  {h.stage ?? "a task"}
                   {h.taskCompleted && <span className="text-good-600 font-semibold"> (completed)</span>}
                 </span>
                 <span className="text-ink-400 shrink-0 ml-2 text-right">
@@ -272,7 +298,34 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
         </div>
       )}
 
-      <div className="mt-6 pt-4 border-t border-paper-100 flex flex-wrap justify-end gap-2">
+      <div className="mt-6 pt-4 border-t border-paper-100 flex flex-wrap items-center justify-end gap-2">
+        {!sentInfo.isSent &&
+          (confirmingMarkSent ? (
+            <span className="flex flex-wrap items-center gap-2 text-[12px] text-ink-600 mr-auto">
+              Sent on
+              <input
+                type="date"
+                value={markSentDate}
+                onChange={(e) => setMarkSentDate(e.target.value)}
+                className="rounded border border-paper-200 px-1.5 py-1 text-[12px] text-ink-700"
+              />
+              — no technician session on file for this.
+              <Button variant="danger" onClick={handleMarkSent}>
+                Confirm
+              </Button>
+              <Button variant="ghost" onClick={() => setConfirmingMarkSent(false)}>
+                Cancel
+              </Button>
+            </span>
+          ) : (
+            <button
+              onClick={() => setConfirmingMarkSent(true)}
+              title="Log a completed Wrap for this panel without a real technician session — for a panel that's already physically shipped but was never scanned"
+              className="mr-auto text-[11px] font-semibold text-ink-500 hover:text-good-600"
+            >
+              Mark as Sent
+            </button>
+          ))}
         <ViewPdfButton panel={panel} />
         <Button variant="subtle" onClick={() => downloadPanelQr(panel)}>
           <DownloadIcon /> Download QR (PNG)
@@ -302,7 +355,10 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
       {editingEntry && (
         <EditWorkHistoryModal
           entry={editingEntry}
-          employeeName={editingEntry.employee?.name ?? "Unknown employee"}
+          employeeName={
+            editingEntry.employee?.name ??
+            (editingEntry.loggedByAdmin ? "Admin — Marked Sent" : "Unknown employee")
+          }
           onClose={() => setEditingEntry(null)}
         />
       )}

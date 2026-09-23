@@ -865,7 +865,15 @@ export function computeStageStats(workHistory, employeeId) {
 // whichever stage has the highest avgHours (or the most totalHours) is
 // where the process is actually spending its time, i.e. the bottleneck.
 export function computeTeamStageStats(workHistory) {
-  return productionStages.map((stage) => stageStatsFromRows(workHistory, stage)).filter(Boolean);
+  // A "Mark as Sent" admin correction (see adminMarkPanelSent in
+  // AppContext.jsx) is a real, completed Wrap row on purpose — every other
+  // "is this panel done" check in the app should see it — but it's a 0-hour
+  // record with no technician behind it, not a real timed session. Counting
+  // it here would drag down the shop's actual average Wrap time and
+  // over-count how many technicians have worked that stage, so it's
+  // excluded from this specific "how long does each step really take" view.
+  const realRows = workHistory.filter((h) => !h.loggedByAdmin);
+  return productionStages.map((stage) => stageStatsFromRows(realRows, stage)).filter(Boolean);
 }
 
 // Week-to-week performance for one employee's profile view — hours,

@@ -229,6 +229,13 @@ export default function SessionLog() {
                         <Link to={`/team/${employee.id}`} className="hover:text-brand-600">
                           {employee.name}
                         </Link>
+                      ) : h.loggedByAdmin ? (
+                        <span className="inline-flex items-center gap-1 text-ink-500">
+                          <span className="text-[10px] font-semibold rounded-full bg-paper-100 px-1.5 py-0.5">
+                            Admin
+                          </span>{" "}
+                          Marked Sent
+                        </span>
                       ) : (
                         <span className="text-ink-400">Unknown employee</span>
                       )}
@@ -279,7 +286,10 @@ export default function SessionLog() {
       {editingEntry && (
         <EditWorkHistoryModal
           entry={editingEntry}
-          employeeName={employeeById.get(editingEntry.employeeId)?.name ?? "Unknown employee"}
+          employeeName={
+            employeeById.get(editingEntry.employeeId)?.name ??
+            (editingEntry.loggedByAdmin ? "Admin — Marked Sent" : "Unknown employee")
+          }
           onClose={() => setEditingEntry(null)}
         />
       )}

@@ -13,6 +13,7 @@ import {
   connectionsPerHour,
   CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD,
   evaluateClockLocation,
+  SHIP_STAGE_LABEL,
 } from "../data/mockData";
 
 const AppContext = createContext(null);
@@ -168,6 +169,7 @@ function toDbWorkHistory(h) {
     rework_reason: h.reworkReason ?? null,
     rework_root_cause: h.reworkRootCause ?? null,
     rework_attributed_to_id: h.reworkAttributedToId ?? null,
+    logged_by_admin: !!h.loggedByAdmin,
   };
 }
 // Partial-update mapper for correcting an existing row — see
@@ -191,6 +193,7 @@ const WORKHISTORY_FIELD_MAP = {
   reworkReason: "rework_reason",
   reworkRootCause: "rework_root_cause",
   reworkAttributedToId: "rework_attributed_to_id",
+  loggedByAdmin: "logged_by_admin",
 };
 function toDbWorkHistoryFields(fields) {
   const out = {};
@@ -234,6 +237,11 @@ function fromDbWorkHistory(row) {
     reworkReason: row.rework_reason ?? null,
     reworkRootCause: row.rework_root_cause ?? null,
     reworkAttributedToId: row.rework_attributed_to_id ?? null,
+    // True only for a row created by the "Mark as Sent" admin action
+    // (Panels page) — a backlog correction for a panel that was actually
+    // shipped before Wrap-scanning discipline existed, not a real
+    // technician session. See adminMarkPanelSent below.
+    loggedByAdmin: !!row.logged_by_admin,
   };
 }
 
@@ -1069,6 +1077,58 @@ export function AppProvider({ children }) {
     );
   }
 
+  // Pat's request (Sept 23, after confirming a large batch of already-in-
+  // service panels have no Wrap scan on file at all — e.g. legacy panels
+  // shipped before Wrap-scanning discipline existed): a way to mark a panel
+  // Sent from the desktop console without pretending a technician actually
+  // scanned it. This writes a real, completed Wrap workHistory row — the
+  // same isShippedSessionRow signal every other "is this panel done" check
+  // in the app relies on (the Panels page's Sent tab, the Dashboard's Avg
+  // Panels Shipped/Day tile, Analytics build-time projections, weekly P&L
+  // revenue recognition) — so the panel correctly starts counting as
+  // shipped everywhere at once. It's deliberately NOT attributed to any
+  // technician (`employeeId: null`, `loggedByAdmin: true`) and carries 0
+  // hours/connections, so it can never be mistaken for real logged work: it
+  // won't appear on anyone's Employee Profile, the Leaderboard, a
+  // connections/hour flag, or a payroll figure — those all key off a real
+  // employeeId, which this row never has. Same remaining-capacity clamp
+  // every other entry-creating path uses (Update 9), even though in
+  // practice a panel being marked Sent should already be at or near 100% on
+  // Wrap.
+  function adminMarkPanelSent(panel, opts = {}) {
+    const tag = panel.panel ?? `#${panel.id}`;
+    const buildId = panel.buildId;
+    const startingProgress = taskProgress(workHistory, tag, SHIP_STAGE_LABEL, buildId);
+    if (startingProgress >= 100) return null; // already has a completed Wrap on file — nothing to do
+    const now = opts.sentAt ? new Date(opts.sentAt) : new Date();
+    const entry = {
+      id: genId("h"),
+      employeeId: null,
+      date: now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
+      panel: tag,
+      stage: SHIP_STAGE_LABEL,
+      buildId,
+      percentAdded: Math.max(0, 100 - startingProgress),
+      taskCompleted: true,
+      connectionsCredited: 0,
+      panels: 1,
+      hours: 0,
+      status: "Verified",
+      createdAt: now.toISOString(),
+      startedAt: null,
+      endedAt: now.toISOString(),
+      loggedByAdmin: true,
+    };
+    setWorkHistory((prev) => [entry, ...prev]);
+    supabase.from("assemblyos_work_history").insert(toDbWorkHistory(entry)).then(reportResult);
+    logActivity(
+      `marked Panel ${tag} (Job #${panel.jobNumber || panel.id}) as Sent — admin correction, no technician session on file`,
+      `Wrap · Panel ${tag}`,
+      { kind: "verify" }
+    );
+    return entry;
+  }
+
   // ---- Time clock ---------------------------------------------------------
   // Handles a scan of the shared "master" clock QR (see clockQrValue in
   // mockData.js) — one code posted at the shop's clock-in point, scanned by
@@ -1400,6 +1460,7 @@ export function AppProvider({ children }) {
     clockLog,
     clockScan,
     adminEndSession,
+    adminMarkPanelSent,
     updateClockLogEntry,
     currentUser,
     admins,
