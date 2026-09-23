@@ -85,6 +85,43 @@ export function Avatar({ employee, sizeClass = "w-7 h-7 text-[11px]" }) {
   );
 }
 
+// Simple client-side tab strip — no routing, just local state, since it's
+// only ever used to split one already-loaded page's sections into folders
+// so an admin isn't scrolling a mile to reach one of them (see
+// EmployeeDetail.jsx). `tabs` is [{ key, label, badge? }]; `active`/
+// `onChange` are controlled from the parent so the active tab can be reset
+// (e.g. back to the first tab) whenever the parent wants.
+export function Tabs({ tabs, active, onChange }) {
+  return (
+    <div className="flex items-center gap-1 border-b border-paper-200 mb-6 overflow-x-auto">
+      {tabs.map((t) => {
+        const isActive = t.key === active;
+        return (
+          <button
+            key={t.key}
+            onClick={() => onChange(t.key)}
+            className={`relative shrink-0 px-3.5 py-2.5 text-[13px] font-semibold transition-colors whitespace-nowrap ${
+              isActive ? "text-brand-600" : "text-ink-500 hover:text-ink-900"
+            }`}
+          >
+            {t.label}
+            {t.badge != null && t.badge !== 0 && (
+              <span
+                className={`ml-1.5 inline-flex items-center justify-center rounded-full text-[10px] font-bold px-1.5 py-0.5 ${
+                  isActive ? "bg-brand-50 text-brand-600" : "bg-paper-100 text-ink-500"
+                }`}
+              >
+                {t.badge}
+              </span>
+            )}
+            {isActive && <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-brand-500 rounded-full" />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function RoleBadge({ role }) {
   const meta = ROLE_META[role];
   return (

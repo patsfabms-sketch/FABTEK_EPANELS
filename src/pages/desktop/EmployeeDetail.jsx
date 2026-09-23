@@ -9,7 +9,7 @@ import {
   computeEmployeeInsights,
   ROLES,
 } from "../../data/mockData";
-import { Card, SectionTitle, StatCard, RoleBadge, Avatar, Button, formatTimeRange } from "../../components/ui";
+import { Card, SectionTitle, StatCard, RoleBadge, Avatar, Button, Tabs, formatTimeRange } from "../../components/ui";
 import EditWorkHistoryModal from "../../components/EditWorkHistoryModal";
 import EditTeamMemberModal from "../../components/EditTeamMemberModal";
 
@@ -27,6 +27,19 @@ export default function EmployeeDetail() {
   const employee = employees.find((e) => e.id === id);
   const [editingEntry, setEditingEntry] = useState(null);
   const [editingProfile, setEditingProfile] = useState(false);
+  // Tabbed layout so this page isn't one long scroll — each tab is a
+  // self-contained "folder" of sections that used to just be stacked
+  // one after another. Local UI state only, resets to Overview whenever a
+  // different employee's page is opened. Adjusted during render (the
+  // React-recommended way to reset state when a prop changes) rather than
+  // in a useEffect, so navigating employee-to-employee doesn't trigger an
+  // extra cascading render/paint just to reset the tab.
+  const [activeTab, setActiveTab] = useState("overview");
+  const [tabResetId, setTabResetId] = useState(id);
+  if (id !== tabResetId) {
+    setTabResetId(id);
+    setActiveTab("overview");
+  }
   // A panel id can have more than one build on file (see the "repeat panel
   // builds" note in mockData.js) — this resolves each history row's buildId
   // back to a job number so entries against the same panel don't look
@@ -109,6 +122,13 @@ export default function EmployeeDetail() {
 
   const target = employee.override ?? roleDefaults[employee.role].daily;
 
+  const TABS = [
+    { key: "overview", label: "Overview" },
+    { key: "performance", label: "Performance" },
+    { key: "attendance", label: "Attendance" },
+    { key: "sessions", label: "Sessions", badge: recentActivity.length },
+  ];
+
   return (
     <div className="p-6 max-w-[1100px] mx-auto">
       <button onClick={() => navigate("/team")} className="text-[13px] font-semibold text-brand-600 hover:text-brand-700 mb-4">
@@ -146,6 +166,10 @@ export default function EmployeeDetail() {
         </Button>
       </div>
 
+      <Tabs tabs={TABS} active={activeTab} onChange={setActiveTab} />
+
+      {activeTab === "overview" && (
+        <>
       <div className="flex flex-wrap gap-4 mb-6">
         <StatCard label="Current Week Avg" value={`${employee.currentWeekAvg} hrs`} />
         <StatCard label="Daily Target" value={`${target} hrs`} sub={employee.override != null ? "Custom override" : "Team default"} />
@@ -190,7 +214,11 @@ export default function EmployeeDetail() {
           ))}
         </div>
       </Card>
+        </>
+      )}
 
+      {activeTab === "performance" && (
+        <>
       <SectionTitle
         title="Week-to-Week Performance"
         subtitle="Hours and sessions logged per payroll week (Wed–Tue) — last 8 weeks, most recent first"
@@ -295,7 +323,11 @@ export default function EmployeeDetail() {
           </p>
         )}
       </Card>
+        </>
+      )}
 
+      {activeTab === "attendance" && (
+        <>
       {employee.role === ROLES.TECH && (
         <>
           <SectionTitle
@@ -390,7 +422,11 @@ export default function EmployeeDetail() {
           </table>
         )}
       </Card>
+        </>
+      )}
 
+      {activeTab === "sessions" && (
+        <>
       <SectionTitle title="Recent Activity" subtitle="Logged sessions from the technician app" />
       <Card padded={false} className="overflow-x-auto">
         {recentActivity.length === 0 ? (
@@ -449,6 +485,8 @@ export default function EmployeeDetail() {
           </table>
         )}
       </Card>
+        </>
+      )}
 
       {editingEntry && (
         <EditWorkHistoryModal

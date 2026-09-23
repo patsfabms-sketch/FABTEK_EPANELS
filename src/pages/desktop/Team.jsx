@@ -3,8 +3,8 @@ import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import QRCode from "qrcode";
 import { useApp } from "../../context/AppContext";
-import { ROLES, ROLE_META, isClockedIn, isoWeekKey, clockQrValue } from "../../data/mockData";
-import { Card, SectionTitle, RoleBadge, AttainmentPill, Button, Modal, Avatar } from "../../components/ui";
+import { ROLES, ROLE_META, isClockedIn, isoWeekKey, clockQrValue, payrollWeekRange, clockedHoursInRange } from "../../data/mockData";
+import { Card, SectionTitle, RoleBadge, Button, Modal, Avatar } from "../../components/ui";
 import EditTeamMemberModal from "../../components/EditTeamMemberModal";
 
 export default function Team() {
@@ -12,7 +12,7 @@ export default function Team() {
   const navigate = useNavigate();
   const [showClockQr, setShowClockQr] = useState(false);
   const [query, setQuery] = useState("");
-  const [sortKey, setSortKey] = useState("attainmentPct");
+  const [sortKey, setSortKey] = useState("clockedThisWeek");
   const [sortDir, setSortDir] = useState("desc");
   const [showAddForm, setShowAddForm] = useState(false);
   const [showAddAdminForm, setShowAddAdminForm] = useState(false);
@@ -20,8 +20,27 @@ export default function Team() {
   const [editingEmployee, setEditingEmployee] = useState(null);
   const [deletingEmployee, setDeletingEmployee] = useState(null);
 
+  // Ticks so "Hrs Clocked In (This Week)" keeps moving for anyone still
+  // clocked in right now — clockedHoursInRange caps an open entry at
+  // min(now, weekEnd), same pattern the Payroll page uses.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(id);
+  }, []);
+
+  // The current payroll week (Wednesday–Tuesday, same week Payroll.jsx and
+  // EmployeeDetail's Week-to-Week Performance use) — reused here so "this
+  // work week" means the same thing everywhere in the app rather than
+  // introducing a third definition of "week."
+  const { start: weekStart, end: weekEnd } = useMemo(() => payrollWeekRange(new Date(now)), [now]);
+
   const rows = useMemo(() => {
-    const filtered = employees.filter((e) =>
+    const withHours = employees.map((e) => ({
+      ...e,
+      clockedThisWeek: clockedHoursInRange(clockLog, e.id, weekStart, weekEnd, { now }),
+    }));
+    const filtered = withHours.filter((e) =>
       e.name.toLowerCase().includes(query.toLowerCase()) || e.role.toLowerCase().includes(query.toLowerCase())
     );
     const sorted = [...filtered].sort((a, b) => {
@@ -31,7 +50,7 @@ export default function Team() {
       return sortDir === "asc" ? av - bv : bv - av;
     });
     return sorted;
-  }, [employees, query, sortKey, sortDir]);
+  }, [employees, clockLog, weekStart, weekEnd, now, query, sortKey, sortDir]);
 
   const roleCounts = useMemo(() => {
     const counts = {};
@@ -54,7 +73,7 @@ export default function Team() {
       <div className="flex items-start justify-between mb-6 flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-ink-900">Team Matrix</h1>
-          <p className="text-sm text-ink-500 mt-1">Roster, roles, and live attainment across the floor</p>
+          <p className="text-sm text-ink-500 mt-1">Roster, roles, and clock status across the floor</p>
         </div>
         <div className="flex items-center gap-2">
           <input
@@ -88,7 +107,12 @@ export default function Team() {
         })}
       </div>
 
-      <SectionTitle title={`Roster (${rows.length})`} subtitle="Click a column header to sort" />
+      <SectionTitle
+        title={`Roster (${rows.length})`}
+        subtitle={`Click a column header to sort · Clocked hours are for the current payroll week (Wed–Tue), week of ${new Date(
+          weekStart
+        ).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`}
+      />
       <Card padded={false} className="overflow-x-auto">
         <table className="w-full text-[13px]">
           <thead>
@@ -98,8 +122,12 @@ export default function Team() {
               <th className="px-4 py-3 font-semibold">Station</th>
               <th className="px-4 py-3 font-semibold">Clock Status</th>
               <th className="px-4 py-3 font-semibold">Active Panel</th>
-              <Th label="Current Avg" onClick={() => toggleSort("currentWeekAvg")} active={sortKey === "currentWeekAvg"} dir={sortDir} />
-              <Th label="Attainment" onClick={() => toggleSort("attainmentPct")} active={sortKey === "attainmentPct"} dir={sortDir} />
+              <Th
+                label="Hrs Clocked In (This Wk)"
+                onClick={() => toggleSort("clockedThisWeek")}
+                active={sortKey === "clockedThisWeek"}
+                dir={sortDir}
+              />
               <Th label="Pay Rate" onClick={() => toggleSort("payRate")} active={sortKey === "payRate"} dir={sortDir} />
               <th className="px-4 py-3 font-semibold text-right">Actions</th>
             </tr>
@@ -123,8 +151,7 @@ export default function Team() {
                   <ClockStatusBadge clockLog={clockLog} employeeId={e.id} />
                 </td>
                 <td className="px-4 py-2.5 text-ink-600">{e.panel ?? "—"}</td>
-                <td className="px-4 py-2.5 text-ink-700 font-medium">{e.currentWeekAvg}</td>
-                <td className="px-4 py-2.5"><AttainmentPill pct={e.attainmentPct} /></td>
+                <td className="px-4 py-2.5 text-ink-700 font-medium">{e.clockedThisWeek} hrs</td>
                 <td className="px-4 py-2.5 text-ink-700 font-medium">${e.payRate?.toFixed(2)}/hr</td>
                 <td className="px-4 py-2.5">
                   <div className="flex items-center justify-end gap-3">
