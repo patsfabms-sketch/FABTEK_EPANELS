@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
 import {
@@ -12,6 +12,36 @@ import {
 } from "../../data/mockData";
 import { Button, formatNumber, formatTimeRange } from "../../components/ui";
 import QrScanner from "../../components/QrScanner";
+
+// Best-effort GPS fix for a Clock QR scan's geofence check (see
+// evaluateClockLocation in mockData.js). Resolves to {lat, lng}, or null if
+// geolocation isn't supported, permission was denied, or no fix came back
+// within the timeout — this never rejects and never blocks the scan itself;
+// a null fix just means that scan gets flagged for a manager to review
+// instead of confirmed on-site.
+const CLOCK_LOCATION_TIMEOUT_MS = 8000;
+function getClockLocation() {
+  return new Promise((resolve) => {
+    if (!("geolocation" in navigator)) {
+      resolve(null);
+      return;
+    }
+    let settled = false;
+    const done = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    navigator.geolocation.getCurrentPosition(
+      (pos) => done({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => done(null),
+      { enableHighAccuracy: true, timeout: CLOCK_LOCATION_TIMEOUT_MS, maximumAge: 60000 }
+    );
+    // Belt-and-suspenders — some browsers/webviews don't reliably honor the
+    // `timeout` option above.
+    setTimeout(() => done(null), CLOCK_LOCATION_TIMEOUT_MS + 500);
+  });
+}
 
 export default function Home() {
   const {
@@ -46,6 +76,14 @@ export default function Home() {
   const [showClockStopPrompt, setShowClockStopPrompt] = useState(false);
   const [clockOutPercent, setClockOutPercent] = useState(null);
 
+  // Kicked off the moment the clock scanner opens (both entry points below)
+  // so the GPS fix has the whole camera-scanning window to resolve, rather
+  // than adding its own delay after a QR code is actually detected.
+  const clockLocationRef = useRef(null);
+  function beginClockLocationLookup() {
+    clockLocationRef.current = getClockLocation();
+  }
+
   const clockedIn = isClockedIn(clockLog, currentUser.id);
   const openClockEntry = clockLog.find((c) => c.employeeId === currentUser.id && !c.clockedOutAt);
 
@@ -63,6 +101,7 @@ export default function Home() {
     setClockError("");
     setClockScanAttempt(0);
     setClockOutPercent(null);
+    clockLocationRef.current = null;
   }
 
   // Called with the raw string decoded off the shop's shared clock QR (see
@@ -71,8 +110,12 @@ export default function Home() {
   // out also auto-ends any panel session still running for them — if they
   // had one, clockOutPercent is whatever they just reported on the prompt
   // below, so it gets logged as real progress rather than silently zeroed.
-  function handleClockDetect(raw) {
-    const result = clockScan(raw, clockOutPercent !== null ? { percentAdded: clockOutPercent } : {});
+  async function handleClockDetect(raw) {
+    const location = await (clockLocationRef.current ?? getClockLocation());
+    const result = clockScan(raw, {
+      ...(clockOutPercent !== null ? { percentAdded: clockOutPercent } : {}),
+      location,
+    });
     if (!result.ok) {
       setClockError(result.error);
       setClockScanAttempt((n) => n + 1); // remounts QrScanner so it can detect again
@@ -191,6 +234,7 @@ export default function Home() {
             }
             setClockError("");
             setClockScanAttempt(0);
+            beginClockLocationLookup();
             setShowClockScanner(true);
           }}
         >
@@ -466,6 +510,7 @@ export default function Home() {
                 setShowClockStopPrompt(false);
                 setClockError("");
                 setClockScanAttempt(0);
+                beginClockLocationLookup();
                 setShowClockScanner(true);
               }}
             >

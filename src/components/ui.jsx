@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { ROLE_META } from "../data/mockData";
+import { getPhotoUrl } from "../data/photoStore";
 
 export function Card({ children, className = "", padded = true, onClick }) {
   return (
@@ -49,6 +50,37 @@ export function SectionTitle({ title, subtitle, action }) {
         {subtitle && <p className="text-xs text-ink-500 mt-0.5">{subtitle}</p>}
       </div>
       {action}
+    </div>
+  );
+}
+
+// A technician/employee's avatar — their uploaded profile photo
+// (employee.photoPath, see photoStore.js) if they have one, otherwise the
+// same initials-circle every avatar in this app already fell back to
+// before photos existed. One shared component so "add a photo and have it
+// show up" doesn't mean hunting down every initials-circle in the app —
+// used today on the Team roster and the EmployeeDetail profile header;
+// other spots (Dashboard, Session Log, the Clocked In modal) still show
+// initials only, a deliberate scope decision, not an oversight — easy to
+// swap in here too later since they'd just start passing the same
+// `employee` object to this component.
+export function Avatar({ employee, sizeClass = "w-7 h-7 text-[11px]" }) {
+  const url = getPhotoUrl(employee?.photoPath);
+  const initials = employee?.name ? employee.name.split(" ").map((n) => n[0]).join("") : "?";
+  if (url) {
+    return (
+      <img
+        src={url}
+        alt={employee.name}
+        className={`${sizeClass} rounded-full object-cover shrink-0 bg-paper-100`}
+      />
+    );
+  }
+  return (
+    <div
+      className={`${sizeClass} rounded-full bg-brand-50 text-brand-600 flex items-center justify-center font-bold shrink-0`}
+    >
+      {initials}
     </div>
   );
 }

@@ -12,6 +12,7 @@ import {
   isValidClockWeek,
   connectionsPerHour,
   CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD,
+  evaluateClockLocation,
 } from "../data/mockData";
 
 const AppContext = createContext(null);
@@ -54,9 +55,20 @@ function fromDbEmployee(row) {
     station: row.station ?? "Unassigned",
     panel: row.panel ?? null,
     hasPin: !!row.has_pin,
+    // Profile fields — none of these affect login, pay math, or attainment;
+    // they're purely for the Team/EmployeeDetail "profile" view (photo,
+    // contact info). See photoStore.js for how photoPath (a storage object
+    // path, not a URL) turns into something displayable.
+    photoPath: row.photo_path ?? null,
+    phone: row.phone ?? "",
+    email: row.email ?? "",
   };
 }
-const EMPLOYEE_FIELD_MAP = { payRate: "pay_rate", currentWeekAvg: "current_week_avg" };
+const EMPLOYEE_FIELD_MAP = {
+  payRate: "pay_rate",
+  currentWeekAvg: "current_week_avg",
+  photoPath: "photo_path",
+};
 function toDbEmployeeInsert(emp) {
   return {
     id: emp.id,
@@ -239,6 +251,14 @@ function toDbClockLog(c) {
     clocked_in_at: new Date(c.clockedInAt).toISOString(),
     clocked_out_at: c.clockedOutAt ? new Date(c.clockedOutAt).toISOString() : null,
     hours: c.hours,
+    in_lat: c.inLat ?? null,
+    in_lng: c.inLng ?? null,
+    in_distance_ft: c.inDistanceFt ?? null,
+    in_location_flagged: c.inLocationFlagged ?? null,
+    out_lat: c.outLat ?? null,
+    out_lng: c.outLng ?? null,
+    out_distance_ft: c.outDistanceFt ?? null,
+    out_location_flagged: c.outLocationFlagged ?? null,
   };
 }
 function fromDbClockLog(row) {
@@ -248,6 +268,18 @@ function fromDbClockLog(row) {
     clockedInAt: row.clocked_in_at ? new Date(row.clocked_in_at).getTime() : null,
     clockedOutAt: row.clocked_out_at ? new Date(row.clocked_out_at).getTime() : null,
     hours: row.hours === null || row.hours === undefined ? null : Number(row.hours),
+    // Geofencing on the Clock QR scan — see evaluateClockLocation in
+    // mockData.js. Rows logged before this feature existed simply have all
+    // of these as null, which the UI treats as "no location on file" rather
+    // than fabricating a flag either way.
+    inLat: row.in_lat === null || row.in_lat === undefined ? null : Number(row.in_lat),
+    inLng: row.in_lng === null || row.in_lng === undefined ? null : Number(row.in_lng),
+    inDistanceFt: row.in_distance_ft === null || row.in_distance_ft === undefined ? null : Number(row.in_distance_ft),
+    inLocationFlagged: row.in_location_flagged ?? null,
+    outLat: row.out_lat === null || row.out_lat === undefined ? null : Number(row.out_lat),
+    outLng: row.out_lng === null || row.out_lng === undefined ? null : Number(row.out_lng),
+    outDistanceFt: row.out_distance_ft === null || row.out_distance_ft === undefined ? null : Number(row.out_distance_ft),
+    outLocationFlagged: row.out_location_flagged ?? null,
   };
 }
 
@@ -998,22 +1030,62 @@ export function AppProvider({ children }) {
 
     const now = Date.now();
     const openEntry = clockLog.find((c) => c.employeeId === currentUserId && !c.clockedOutAt);
+    // opts.location is a {lat, lng} fix from the phone's browser geolocation
+    // (captured by Home.jsx right before this scan), or null if it couldn't
+    // get one (denied, timed out, unsupported) — either way this always
+    // resolves to a result, never throws, and never blocks the scan.
+    const inLoc = evaluateClockLocation(opts.location ?? null);
 
     if (!openEntry) {
-      const entry = { id: genId("clk"), employeeId: currentUserId, clockedInAt: now, clockedOutAt: null, hours: null };
+      const entry = {
+        id: genId("clk"),
+        employeeId: currentUserId,
+        clockedInAt: now,
+        clockedOutAt: null,
+        hours: null,
+        inLat: inLoc.lat,
+        inLng: inLoc.lng,
+        inDistanceFt: inLoc.distanceFt,
+        inLocationFlagged: inLoc.flagged,
+      };
       setClockLog((prev) => [entry, ...prev]);
       supabase.from("assemblyos_clock_log").insert(toDbClockLog(entry)).then(reportResult);
-      logActivity("clocked in", "", { who: currentUser?.name ?? "Technician", kind: "scan" });
-      return { ok: true, type: "in" };
+      logActivity(inLoc.flagged ? "clocked in (location flagged)" : "clocked in", "", {
+        who: currentUser?.name ?? "Technician",
+        kind: inLoc.flagged ? "verify" : "scan",
+      });
+      return { ok: true, type: "in", locationFlagged: inLoc.flagged, distanceFt: inLoc.distanceFt };
     }
 
     // Raw gross duration (no break subtraction) — a presence record, not a
     // "hours worked" figure; see the comment on toDbClockLog.
     const grossHours = Number(((now - openEntry.clockedInAt) / 3600000).toFixed(2));
-    setClockLog((prev) => prev.map((c) => (c.id === openEntry.id ? { ...c, clockedOutAt: now, hours: grossHours } : c)));
+    const outLoc = evaluateClockLocation(opts.location ?? null);
+    setClockLog((prev) =>
+      prev.map((c) =>
+        c.id === openEntry.id
+          ? {
+              ...c,
+              clockedOutAt: now,
+              hours: grossHours,
+              outLat: outLoc.lat,
+              outLng: outLoc.lng,
+              outDistanceFt: outLoc.distanceFt,
+              outLocationFlagged: outLoc.flagged,
+            }
+          : c
+      )
+    );
     supabase
       .from("assemblyos_clock_log")
-      .update({ clocked_out_at: new Date(now).toISOString(), hours: grossHours })
+      .update({
+        clocked_out_at: new Date(now).toISOString(),
+        hours: grossHours,
+        out_lat: outLoc.lat,
+        out_lng: outLoc.lng,
+        out_distance_ft: outLoc.distanceFt,
+        out_location_flagged: outLoc.flagged,
+      })
       .eq("id", openEntry.id)
       .then(reportResult);
 
@@ -1062,12 +1134,16 @@ export function AppProvider({ children }) {
       });
     }
 
-    logActivity(
+    const clockOutSuffix = [
       stuckSessions.length > 0
-        ? `clocked out — ${stuckSessions.length} session${stuckSessions.length === 1 ? "" : "s"} auto-ended${flaggedCount > 0 ? ` (${flaggedCount} flagged for review)` : ""}`
-        : "clocked out",
+        ? `${stuckSessions.length} session${stuckSessions.length === 1 ? "" : "s"} auto-ended${flaggedCount > 0 ? ` (${flaggedCount} flagged for review)` : ""}`
+        : null,
+      outLoc.flagged ? "location flagged" : null,
+    ].filter(Boolean);
+    logActivity(
+      clockOutSuffix.length > 0 ? `clocked out — ${clockOutSuffix.join(", ")}` : "clocked out",
       "",
-      { who: currentUser?.name ?? "Technician", kind: stuckSessions.length > 0 ? "verify" : "scan" }
+      { who: currentUser?.name ?? "Technician", kind: stuckSessions.length > 0 || outLoc.flagged ? "verify" : "scan" }
     );
     return {
       ok: true,
@@ -1075,6 +1151,8 @@ export function AppProvider({ children }) {
       autoEndedSessions: stuckSessions.length,
       autoEndedFlagged: flaggedCount,
       hours: grossHours,
+      locationFlagged: outLoc.flagged,
+      distanceFt: outLoc.distanceFt,
     };
   }
 

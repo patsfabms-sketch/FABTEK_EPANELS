@@ -6,6 +6,7 @@ import Dashboard from "./pages/desktop/Dashboard";
 import Reports from "./pages/desktop/Reports";
 import Goals from "./pages/desktop/Goals";
 import Team from "./pages/desktop/Team";
+import Payroll from "./pages/desktop/Payroll";
 import Estimates from "./pages/desktop/Estimates";
 import EmployeeDetail from "./pages/desktop/EmployeeDetail";
 import SessionLog from "./pages/desktop/SessionLog";
@@ -29,6 +30,7 @@ export default function App() {
             <Route path="/goals" element={<Goals />} />
             <Route path="/team" element={<Team />} />
             <Route path="/team/:id" element={<EmployeeDetail />} />
+            <Route path="/payroll" element={<Payroll />} />
             <Route path="/sessions" element={<SessionLog />} />
             <Route path="/estimates" element={<Estimates />} />
             <Route path="/panels" element={<Panels />} />

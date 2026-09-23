@@ -243,8 +243,22 @@ function ClockedInModal({ clockLog, clockedInEmployees, notClockedInEmployees, o
                   <span className="text-[13px] font-medium text-ink-900 truncate">{e.name}</span>
                   <RoleBadge role={e.role} />
                 </div>
-                <span className="text-[11px] font-semibold text-good-600 shrink-0 ml-2">
-                  {open ? `Since ${new Date(open.clockedInAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}
+                <span className="flex items-center gap-1.5 shrink-0 ml-2">
+                  {open?.inLocationFlagged && (
+                    <span
+                      title={
+                        open.inDistanceFt === null
+                          ? "Clock-in: no location on file"
+                          : `Clock-in: ${open.inDistanceFt} ft from shop`
+                      }
+                      className="text-[10px] font-semibold rounded-full px-1.5 py-0.5 bg-bad-50 text-bad-600"
+                    >
+                      Flagged
+                    </span>
+                  )}
+                  <span className="text-[11px] font-semibold text-good-600">
+                    {open ? `Since ${new Date(open.clockedInAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}
+                  </span>
                 </span>
               </div>
             );

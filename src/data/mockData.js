@@ -471,6 +471,56 @@ export function isClockedIn(clockLog, employeeId) {
   return clockLog.some((c) => c.employeeId === employeeId && !c.clockedOutAt);
 }
 
+// ---------------------------------------------------------------------------
+// Clock QR geofencing — checks a clock-in/out scan against "were they
+// actually at the shop." Deliberately "allow it, but flag for review" rather
+// than a hard block (the design Pat picked when this was scoped out): a bad
+// GPS fix, a phone with location services off, or someone legitimately
+// stepping just outside the radius to get signal shouldn't stop a technician
+// from clocking in for their shift — but a scan from well outside the shop,
+// or one with no location at all, is worth a manager's eyes. See
+// evaluateClockLocation below and AppContext.clockScan, which calls it.
+//
+// FabTek Industries — 19171 Hwy 51, Hazlehurst, MS 39083 (geocoded via the
+// US Census Bureau's public geocoder, which matched this address exactly).
+// If the shop ever moves, or the radius needs to change, these three
+// constants are the only thing to touch.
+export const SHOP_LOCATION = { lat: 31.921913609283, lng: -90.396000564484 };
+export const CLOCK_GEOFENCE_RADIUS_FT = 500;
+
+// Great-circle (haversine) distance between two lat/lng points, in feet.
+export function distanceFeet(lat1, lng1, lat2, lng2) {
+  const EARTH_RADIUS_FT = 20925721; // Earth's mean radius, in feet
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return EARTH_RADIUS_FT * c;
+}
+
+// Turns whatever the phone reported for a clock scan (a {lat, lng} fix, or
+// null if location was unavailable, denied, or timed out) into the fields
+// AppContext.clockScan stores on that clock log row: the coordinates seen
+// (if any), the distance from the shop in feet (null with no fix), and
+// whether this scan should be flagged for a manager to review. A missing fix
+// is flagged too — no location on file means there's nothing to confirm they
+// were on-site, which is exactly the situation review exists to catch.
+// Flagging never blocks the scan itself; see the comment above.
+export function evaluateClockLocation(coords) {
+  if (!coords || typeof coords.lat !== "number" || typeof coords.lng !== "number") {
+    return { lat: null, lng: null, distanceFt: null, flagged: true };
+  }
+  const distanceFt = Math.round(distanceFeet(coords.lat, coords.lng, SHOP_LOCATION.lat, SHOP_LOCATION.lng));
+  return {
+    lat: coords.lat,
+    lng: coords.lng,
+    distanceFt,
+    flagged: distanceFt > CLOCK_GEOFENCE_RADIUS_FT,
+  };
+}
+
 // Stages a technician can pick after scanning a panel's QR code.
 export const productionStages = [
   { key: "prep", label: "Panel Prep" },
@@ -579,6 +629,102 @@ export function computeStageStats(workHistory, employeeId) {
 // where the process is actually spending its time, i.e. the bottleneck.
 export function computeTeamStageStats(workHistory) {
   return productionStages.map((stage) => stageStatsFromRows(workHistory, stage)).filter(Boolean);
+}
+
+// Week-to-week performance for one employee's profile view — hours,
+// sessions, connections credited, and flagged-session count, bucketed by
+// the same Wednesday-anchored payroll week used for overtime above (see
+// payrollWeekKey/payrollWeekStart). Reused here rather than introducing a
+// second, different "week" — once the shop's operating week starts
+// Wednesday, that's the natural week-over-week grouping everywhere, not
+// just for pay. Bucketed by `createdAt` (the real DB timestamp), same
+// reasoning the trend charts elsewhere in this file already use — `date` is
+// a display-only string with no year in it. Rows with no `createdAt` yet
+// (shouldn't normally happen — see the comment on that field) are skipped
+// rather than crashing. Most-recent-week-first, capped at `weeks` entries;
+// a week with zero sessions simply doesn't appear (nothing to show), same
+// "don't fabricate a day/week that didn't happen" philosophy already used
+// for Non-Productive Time.
+export function computeWeeklyPerformance(workHistory, employeeId, { weeks = 8, now = Date.now() } = {}) {
+  const mine = workHistory.filter((h) => h.employeeId === employeeId && h.createdAt);
+  const buckets = new Map();
+  mine.forEach((h) => {
+    const d = new Date(h.createdAt);
+    if (Number.isNaN(d.getTime())) return;
+    const weekKey = payrollWeekKey(d);
+    if (!buckets.has(weekKey)) {
+      buckets.set(weekKey, { weekKey, weekStart: payrollWeekStart(d).getTime(), hours: 0, sessions: 0, connections: 0, flagged: 0 });
+    }
+    const b = buckets.get(weekKey);
+    b.hours += h.hours || 0;
+    b.sessions += 1;
+    b.connections += h.connectionsCredited || 0;
+    if (h.status === "Flagged") b.flagged += 1;
+  });
+  return Array.from(buckets.values())
+    .filter((b) => b.weekStart <= now)
+    .map((b) => ({ ...b, hours: Number(b.hours.toFixed(2)) }))
+    .sort((a, b) => b.weekStart - a.weekStart)
+    .slice(0, weeks);
+}
+
+// "What they're good at, what they need to work on" for one employee's
+// profile view — entirely derived from real logged sessions, nothing
+// manually entered or seeded. Compares this employee's own average
+// hours-per-session at each production stage against the shop-wide average
+// for that same stage (computeTeamStageStats): lower avgHours is better
+// (faster), so a stage where they run meaningfully faster than the shop
+// average is a strength, meaningfully slower is an area to work on.
+//
+// Gated two ways so this doesn't read noise as a pattern: a stage only
+// counts once BOTH this employee and the shop as a whole have logged at
+// least INSIGHT_MIN_SESSIONS sessions there (one lucky or unlucky session
+// shouldn't define a "finding"), and only once the difference from the shop
+// average is at least INSIGHT_MIN_PCT_DIFF (ordinary day-to-day variation
+// shouldn't either). Also reports two signals that aren't stage-specific:
+// this employee's overall Flagged rate, and how many times a Rework entry
+// (see the Rework-attribution update) has named them as the root cause —
+// both worth a manager's attention even though neither is a "stage."
+const INSIGHT_MIN_SESSIONS = 3;
+const INSIGHT_MIN_PCT_DIFF = 0.15;
+
+export function computeEmployeeInsights(workHistory, employeeId) {
+  const mineStats = computeStageStats(workHistory, employeeId);
+  const teamStats = computeTeamStageStats(workHistory);
+  const teamByKey = new Map(teamStats.map((s) => [s.key, s]));
+
+  const comparisons = mineStats
+    .map((mine) => {
+      const team = teamByKey.get(mine.key);
+      if (!team || mine.sessions < INSIGHT_MIN_SESSIONS || team.sessions < INSIGHT_MIN_SESSIONS || team.avgHours <= 0) {
+        return null;
+      }
+      const pctDiff = (team.avgHours - mine.avgHours) / team.avgHours; // positive = faster than the shop average
+      return { key: mine.key, label: mine.label, mineAvgHours: mine.avgHours, teamAvgHours: team.avgHours, pctDiff };
+    })
+    .filter(Boolean);
+
+  const strengths = comparisons
+    .filter((c) => c.pctDiff >= INSIGHT_MIN_PCT_DIFF)
+    .sort((a, b) => b.pctDiff - a.pctDiff)
+    .slice(0, 3);
+  const improvements = comparisons
+    .filter((c) => c.pctDiff <= -INSIGHT_MIN_PCT_DIFF)
+    .sort((a, b) => a.pctDiff - b.pctDiff)
+    .slice(0, 3);
+
+  const mine = workHistory.filter((h) => h.employeeId === employeeId);
+  const flaggedCount = mine.filter((h) => h.status === "Flagged").length;
+  const reworkAttributedCount = workHistory.filter((h) => h.reworkAttributedToId === employeeId).length;
+
+  return {
+    strengths,
+    improvements,
+    totalSessions: mine.length,
+    flaggedCount,
+    flaggedRate: mine.length > 0 ? Number(((flaggedCount / mine.length) * 100).toFixed(1)) : 0,
+    reworkAttributedCount,
+  };
 }
 
 // "Start to finish" build-time projections — for every build that's
@@ -862,4 +1008,101 @@ export function computeBlendedLaborRate(workHistory, employees) {
     totalCost: Number(totalCost.toFixed(2)),
     blendedRate: totalHours > 0 ? Number((totalCost / totalHours).toFixed(2)) : null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Payroll week + overtime. The shop's payroll week runs Wednesday through
+// Tuesday — a different "week" than the Clock QR's Monday-anchored ISO week
+// above (isoWeekKey), which rotates for an unrelated reason (a weekly
+// printed sheet). Every hour an employee is actually clocked in past 40 in a
+// single payroll week pays out at 1.5x their normal rate — one flat rule for
+// everyone, not scoped by role, matching how it was asked ("when someone
+// logs in after the 40th hour").
+//
+// Overtime is computed from CLOCKED (attendance) hours — assemblyos_clock_log
+// — not from workHistory's production/task hours. Two reasons: (1) paid
+// breaks (see the break-windows update) are already inside a clocked span,
+// and payroll owes pay for that whole span, not just task time; (2)
+// overtime is a function of how long someone was actually at the shop that
+// week, not how much of it they happened to log against a specific panel —
+// a technician can be clocked in without an active session (between tasks,
+// waiting on parts, etc.) and that time still counts toward their 40.
+export const OVERTIME_THRESHOLD_HOURS = 40;
+export const OVERTIME_MULTIPLIER = 1.5;
+
+// Midnight (local time) of the Wednesday that starts the payroll week
+// containing `date`.
+export function payrollWeekStart(date = new Date()) {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diffFromWed = (d.getDay() - 3 + 7) % 7; // getDay(): 0=Sun..6=Sat, Wednesday=3
+  d.setDate(d.getDate() - diffFromWed);
+  return d;
+}
+
+// Stable string key for the payroll week containing `date` — the calendar
+// date (YYYY-MM-DD) of that week's Wednesday, e.g. "2026-09-23".
+export function payrollWeekKey(date = new Date()) {
+  const start = payrollWeekStart(date);
+  return `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
+}
+
+// [start, end) millisecond bounds of the payroll week containing `date`.
+export function payrollWeekRange(date = new Date()) {
+  const start = payrollWeekStart(date);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 7);
+  return { start: start.getTime(), end: end.getTime() };
+}
+
+// Sums one employee's clocked (attendance) hours from clockLog that fall
+// inside [rangeStart, rangeEnd) — clipping any entry that only partially
+// overlaps the range to just its overlapping portion, rather than counting
+// it whole or not at all (an employee who clocked in Tuesday night and out
+// Wednesday morning should only have the Wednesday portion count toward the
+// new payroll week). An entry that's still open is capped at `now` (or the
+// range end, whichever is earlier) — same "never trust a runaway span"
+// caution effectiveElapsedMs/computeNonProductiveTime already apply
+// elsewhere, so a forgotten clock-out can't balloon into phantom overtime.
+export function clockedHoursInRange(clockLog, employeeId, rangeStart, rangeEnd, { now = Date.now() } = {}) {
+  let ms = 0;
+  clockLog
+    .filter((c) => c.employeeId === employeeId)
+    .forEach((c) => {
+      const inAt = c.clockedInAt;
+      const outAt = c.clockedOutAt ?? Math.min(now, rangeEnd);
+      const overlapStart = Math.max(inAt, rangeStart);
+      const overlapEnd = Math.min(outAt, rangeEnd);
+      if (overlapEnd > overlapStart) ms += overlapEnd - overlapStart;
+    });
+  return Number((ms / 3600000).toFixed(2));
+}
+
+// Regular/overtime hours + pay for one employee across the payroll week
+// [rangeStart, rangeEnd). `regularHours` is capped at OVERTIME_THRESHOLD_HOURS
+// so it and `overtimeHours` always add back up to the real total exactly.
+export function computeOvertimePay(clockLog, employee, rangeStart, rangeEnd, { now = Date.now() } = {}) {
+  const totalHours = clockedHoursInRange(clockLog, employee.id, rangeStart, rangeEnd, { now });
+  const regularHours = Number(Math.min(totalHours, OVERTIME_THRESHOLD_HOURS).toFixed(2));
+  const overtimeHours = Number(Math.max(0, totalHours - OVERTIME_THRESHOLD_HOURS).toFixed(2));
+  const rate = employee.payRate || 0;
+  const regularPay = Number((regularHours * rate).toFixed(2));
+  const overtimePay = Number((overtimeHours * rate * OVERTIME_MULTIPLIER).toFixed(2));
+  return {
+    totalHours,
+    regularHours,
+    overtimeHours,
+    regularPay,
+    overtimePay,
+    totalPay: Number((regularPay + overtimePay).toFixed(2)),
+  };
+}
+
+// Shop-wide payroll roll-up for a given payroll week — one row per employee
+// (including anyone with zero hours that week, since a payroll admin needs
+// to see who DIDN'T clock in at all, not just who did), sorted by total pay
+// descending.
+export function computePayrollSummary(clockLog, employees, rangeStart, rangeEnd, { now = Date.now() } = {}) {
+  return employees
+    .map((e) => ({ employee: e, ...computeOvertimePay(clockLog, e, rangeStart, rangeEnd, { now }) }))
+    .sort((a, b) => b.totalPay - a.totalPay);
 }

@@ -4,7 +4,8 @@ import { useNavigate } from "react-router-dom";
 import QRCode from "qrcode";
 import { useApp } from "../../context/AppContext";
 import { ROLES, ROLE_META, isClockedIn, isoWeekKey, clockQrValue } from "../../data/mockData";
-import { Card, SectionTitle, RoleBadge, AttainmentPill, Button, Modal } from "../../components/ui";
+import { Card, SectionTitle, RoleBadge, AttainmentPill, Button, Modal, Avatar } from "../../components/ui";
+import EditTeamMemberModal from "../../components/EditTeamMemberModal";
 
 export default function Team() {
   const { employees, admins, workHistory, clockLog, addEmployee, updateEmployee, deleteEmployee, addAdmin } = useApp();
@@ -113,9 +114,7 @@ export default function Team() {
                 }`}
               >
                 <td className="px-4 py-2.5 font-medium text-ink-900 flex items-center gap-2.5">
-                  <div className="w-7 h-7 rounded-full bg-brand-50 text-brand-600 flex items-center justify-center text-[11px] font-bold shrink-0">
-                    {e.name.split(" ").map((n) => n[0]).join("")}
-                  </div>
+                  <Avatar employee={e} />
                   {e.name}
                 </td>
                 <td className="px-4 py-2.5"><RoleBadge role={e.role} /></td>
@@ -449,104 +448,6 @@ function AddTeamMemberModal({ onClose, onCreate }) {
         </Button>
       </div>
     </div>
-  );
-}
-
-function EditTeamMemberModal({ employee, onClose, onSave }) {
-  const [name, setName] = useState(employee.name);
-  const [role, setRole] = useState(employee.role);
-  const [station, setStation] = useState(employee.station ?? "");
-  const [payRate, setPayRate] = useState(String(employee.payRate ?? ""));
-  const [error, setError] = useState("");
-
-  function handleSubmit() {
-    if (!name.trim()) {
-      setError("Enter the technician's name.");
-      return;
-    }
-    if (!payRate || Number(payRate) <= 0) {
-      setError("Enter a pay rate greater than 0.");
-      return;
-    }
-    setError("");
-    onSave({
-      name: name.trim(),
-      role,
-      station: station.trim() || "Unassigned",
-      payRate: Number(payRate),
-    });
-  }
-
-  return (
-    <Modal onClose={onClose} widthClass="max-w-[380px]">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-ink-900">Edit Team Member</h3>
-        <button onClick={onClose} className="text-ink-400 text-lg leading-none">
-          ×
-        </button>
-      </div>
-
-      <label className="block mb-3">
-        <span className="text-xs font-semibold text-ink-500">Full Name</span>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
-        />
-      </label>
-
-      <label className="block mb-3">
-        <span className="text-xs font-semibold text-ink-500">Role</span>
-        <select
-          value={role}
-          onChange={(e) => setRole(e.target.value)}
-          className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm bg-white"
-        >
-          {Object.values(ROLES).map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <label className="block mb-3">
-        <span className="text-xs font-semibold text-ink-500">Station</span>
-        <input
-          value={station}
-          onChange={(e) => setStation(e.target.value)}
-          placeholder="e.g. Bench 3"
-          className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
-        />
-      </label>
-
-      <label className="block mb-4">
-        <span className="text-xs font-semibold text-ink-500">Pay Rate</span>
-        <div className="mt-1 flex items-center gap-1.5">
-          <span className="text-sm text-ink-500">$</span>
-          <input
-            type="number"
-            step="0.25"
-            min="0"
-            value={payRate}
-            onChange={(e) => setPayRate(e.target.value)}
-            className="w-full rounded-lg border border-paper-200 px-3 py-2 text-sm"
-          />
-          <span className="text-xs text-ink-500">/hr</span>
-        </div>
-      </label>
-
-      <p className="text-[11px] text-ink-400 mb-4">
-        Username (@{employee.username}) and PIN aren't changed here — those are set by the technician on
-        the mobile app.
-      </p>
-
-      {error && <p className="text-[11px] text-bad-600 mb-3">{error}</p>}
-
-      <Button className="w-full py-2.5" onClick={handleSubmit}>
-        Save Changes
-      </Button>
-    </Modal>
   );
 }
 

@@ -9,6 +9,7 @@ const NAV = [
   { to: "/reports", label: "Analytics", icon: ReportsIcon },
   { to: "/goals", label: "Goals", icon: GoalsIcon },
   { to: "/team", label: "Team", icon: TeamIcon },
+  { to: "/payroll", label: "Payroll", icon: PayrollIcon },
   { to: "/sessions", label: "Session Log", icon: SessionLogIcon },
   { to: "/estimates", label: "Estimates", icon: EstimatesIcon },
   { to: "/get-app", label: "Get the App", icon: GetAppIcon },
@@ -130,6 +131,14 @@ function PanelsIcon(props) {
     <svg {...iconProps(props)}>
       <rect x="3.5" y="3.5" width="17" height="17" rx="1.5" />
       <path d="M8 3.5v17M14 3.5v17M3.5 9.5h17M3.5 15h17" />
+    </svg>
+  );
+}
+function PayrollIcon(props) {
+  return (
+    <svg {...iconProps(props)}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7v10M9.5 9.5c0-1.1 1.1-2 2.5-2s2.5.7 2.5 1.8-1 1.7-2.5 2-2.5.9-2.5 2 1.1 1.8 2.5 1.8 2.5-.9 2.5-2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

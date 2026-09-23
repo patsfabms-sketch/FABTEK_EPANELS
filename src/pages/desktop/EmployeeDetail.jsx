@@ -5,10 +5,13 @@ import {
   computeStageStats,
   attainmentTone,
   computeNonProductiveTime,
+  computeWeeklyPerformance,
+  computeEmployeeInsights,
   ROLES,
 } from "../../data/mockData";
-import { Card, SectionTitle, StatCard, RoleBadge, formatTimeRange } from "../../components/ui";
+import { Card, SectionTitle, StatCard, RoleBadge, Avatar, Button, formatTimeRange } from "../../components/ui";
 import EditWorkHistoryModal from "../../components/EditWorkHistoryModal";
+import EditTeamMemberModal from "../../components/EditTeamMemberModal";
 
 const TONE_ACCENT = {
   good: "text-good-600",
@@ -19,10 +22,11 @@ const TONE_ACCENT = {
 export default function EmployeeDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { employees, roleDefaults, workHistory, panels, clockLog } = useApp();
+  const { employees, roleDefaults, workHistory, panels, clockLog, updateEmployee } = useApp();
 
   const employee = employees.find((e) => e.id === id);
   const [editingEntry, setEditingEntry] = useState(null);
+  const [editingProfile, setEditingProfile] = useState(false);
   // A panel id can have more than one build on file (see the "repeat panel
   // builds" note in mockData.js) — this resolves each history row's buildId
   // back to a job number so entries against the same panel don't look
@@ -72,6 +76,26 @@ export default function EmployeeDetail() {
   );
   const openClockEntry = clockEvents.find((c) => !c.clockedOutAt);
 
+  // Week-to-week performance — hours/sessions/connections logged per
+  // payroll week (Wednesday–Tuesday, same week the Payroll page uses), most
+  // recent first. See computeWeeklyPerformance's own comment for why this
+  // reuses the payroll week rather than a separate week concept.
+  const weeklyPerformance = useMemo(
+    () => (employee ? computeWeeklyPerformance(workHistory, employee.id) : []),
+    [employee, workHistory]
+  );
+  const maxWeeklyHours = Math.max(...weeklyPerformance.map((w) => w.hours), 1);
+
+  // "What they're good at, what they need to work on" — entirely derived
+  // from this technician's own logged sessions vs. the shop-wide average
+  // per stage. See computeEmployeeInsights's own comment for the gating
+  // rules (minimum session counts, minimum % difference) that keep this
+  // from reading noise as a real pattern.
+  const insights = useMemo(
+    () => (employee ? computeEmployeeInsights(workHistory, employee.id) : null),
+    [employee, workHistory]
+  );
+
   if (!employee) {
     return (
       <div className="p-6 max-w-[1100px] mx-auto">
@@ -91,30 +115,35 @@ export default function EmployeeDetail() {
         ← Back to Team
       </button>
 
-      <div className="flex items-center gap-4 mb-6">
-        <div className="w-14 h-14 rounded-full bg-brand-50 text-brand-600 flex items-center justify-center text-lg font-bold shrink-0">
-          {employee.name.split(" ").map((n) => n[0]).join("")}
-        </div>
-        <div>
-          <h1 className="text-xl font-bold text-ink-900">{employee.name}</h1>
-          <div className="flex items-center gap-2 mt-1">
-            <RoleBadge role={employee.role} />
-            <span className="text-xs text-ink-500">
-              {employee.station} · Panel {employee.panel ?? "unassigned"}
-            </span>
-            {openClockEntry && (
-              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-good-600">
-                <span className="w-1.5 h-1.5 rounded-full bg-good-500 animate-pulse" />
-                Clocked in since{" "}
-                {new Date(openClockEntry.clockedInAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+      <div className="flex items-start justify-between gap-4 mb-6">
+        <div className="flex items-center gap-4">
+          <Avatar employee={employee} sizeClass="w-14 h-14 text-lg" />
+          <div>
+            <h1 className="text-xl font-bold text-ink-900">{employee.name}</h1>
+            <div className="flex items-center gap-2 mt-1">
+              <RoleBadge role={employee.role} />
+              <span className="text-xs text-ink-500">
+                {employee.station} · Panel {employee.panel ?? "unassigned"}
               </span>
-            )}
+              {openClockEntry && (
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-good-600">
+                  <span className="w-1.5 h-1.5 rounded-full bg-good-500 animate-pulse" />
+                  Clocked in since{" "}
+                  {new Date(openClockEntry.clockedInAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-ink-500 mt-1">
+              @{employee.username}
+              {employee.payRate != null ? ` · $${employee.payRate.toFixed(2)}/hr` : ""}
+              {employee.phone ? ` · ${employee.phone}` : ""}
+              {employee.email ? ` · ${employee.email}` : ""}
+            </p>
           </div>
-          <p className="text-[11px] text-ink-500 mt-1">
-            @{employee.username}
-            {employee.payRate != null ? ` · $${employee.payRate.toFixed(2)}/hr` : ""}
-          </p>
         </div>
+        <Button variant="ghost" onClick={() => setEditingProfile(true)}>
+          Edit Profile
+        </Button>
       </div>
 
       <div className="flex flex-wrap gap-4 mb-6">
@@ -160,6 +189,111 @@ export default function EmployeeDetail() {
             </div>
           ))}
         </div>
+      </Card>
+
+      <SectionTitle
+        title="Week-to-Week Performance"
+        subtitle="Hours and sessions logged per payroll week (Wed–Tue) — last 8 weeks, most recent first"
+      />
+      <Card padded={false} className="overflow-x-auto mb-8">
+        {weeklyPerformance.length === 0 ? (
+          <p className="text-xs text-ink-400 text-center py-8">No logged sessions yet.</p>
+        ) : (
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
+                <th className="px-4 py-3 font-semibold">Payroll Week</th>
+                <th className="px-4 py-3 font-semibold">Hours</th>
+                <th className="px-4 py-3 font-semibold">Sessions</th>
+                <th className="px-4 py-3 font-semibold">Connections</th>
+                <th className="px-4 py-3 font-semibold">Flagged</th>
+                <th className="px-4 py-3 font-semibold"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {weeklyPerformance.map((w, i) => (
+                <tr key={w.weekKey} className={`border-b border-paper-100 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
+                  <td className="px-4 py-2.5 text-ink-900 font-medium">
+                    Week of {new Date(w.weekStart).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                  </td>
+                  <td className="px-4 py-2.5 text-ink-700 font-medium">{w.hours}</td>
+                  <td className="px-4 py-2.5 text-ink-700">{w.sessions}</td>
+                  <td className="px-4 py-2.5 text-ink-700">{w.connections > 0 ? w.connections : "—"}</td>
+                  <td className="px-4 py-2.5 text-ink-700">
+                    {w.flagged > 0 ? <span className="text-bad-600 font-semibold">{w.flagged}</span> : "—"}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <div className="h-2 w-24 rounded-full bg-paper-100 overflow-hidden">
+                      <div className="h-full rounded-full bg-brand-500" style={{ width: `${(w.hours / maxWeeklyHours) * 100}%` }} />
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      <SectionTitle
+        title="Strengths & Areas to Improve"
+        subtitle="Their own average time per stage vs. the shop-wide average, from real logged sessions — not a manual review"
+      />
+      <Card className="mb-8">
+        {!insights || (insights.strengths.length === 0 && insights.improvements.length === 0) ? (
+          <p className="text-xs text-ink-400 text-center py-6">
+            Not enough logged history yet at any one stage to say — this fills in once they've logged a handful of
+            sessions at stages the rest of the shop has also logged enough of to compare against.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+            <div>
+              <p className="text-[11px] font-semibold text-good-600 uppercase tracking-wide mb-2">Strengths</p>
+              {insights.strengths.length === 0 ? (
+                <p className="text-xs text-ink-400">Nothing stands out yet either way.</p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {insights.strengths.map((s) => (
+                    <li key={s.key} className="text-[13px] text-ink-900">
+                      <span className="font-medium">{s.label}</span>{" "}
+                      <span className="text-[11px] text-good-600 font-semibold">
+                        {Math.round(s.pctDiff * 100)}% faster than shop avg
+                      </span>
+                      <div className="text-[11px] text-ink-500">{s.mineAvgHours} hrs/task vs {s.teamAvgHours} hrs/task shop avg</div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div>
+              <p className="text-[11px] font-semibold text-warn-600 uppercase tracking-wide mb-2">Areas to Improve</p>
+              {insights.improvements.length === 0 ? (
+                <p className="text-xs text-ink-400">Nothing stands out yet either way.</p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {insights.improvements.map((s) => (
+                    <li key={s.key} className="text-[13px] text-ink-900">
+                      <span className="font-medium">{s.label}</span>{" "}
+                      <span className="text-[11px] text-warn-600 font-semibold">
+                        {Math.round(Math.abs(s.pctDiff) * 100)}% slower than shop avg
+                      </span>
+                      <div className="text-[11px] text-ink-500">{s.mineAvgHours} hrs/task vs {s.teamAvgHours} hrs/task shop avg</div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+        {insights && insights.totalSessions > 0 && (
+          <p className="text-[11px] text-ink-400 mt-4 pt-3 border-t border-paper-100">
+            {insights.flaggedCount} of {insights.totalSessions} logged session{insights.totalSessions === 1 ? "" : "s"} flagged
+            for review ({insights.flaggedRate}%){insights.reworkAttributedCount > 0
+              ? ` · Rework attributed to them ${insights.reworkAttributedCount} time${insights.reworkAttributedCount === 1 ? "" : "s"}`
+              : ""}
+            . Only stages with enough sessions logged — by them and by the shop — show up above, so a slow start at a
+            new stage doesn't read as a weakness.
+          </p>
+        )}
       </Card>
 
       {employee.role === ROLES.TECH && (
@@ -227,6 +361,7 @@ export default function EmployeeDetail() {
                 <th className="px-4 py-3 font-semibold">Clocked In</th>
                 <th className="px-4 py-3 font-semibold">Clocked Out</th>
                 <th className="px-4 py-3 font-semibold">Hours</th>
+                <th className="px-4 py-3 font-semibold">Location</th>
               </tr>
             </thead>
             <tbody>
@@ -246,6 +381,9 @@ export default function EmployeeDetail() {
                     )}
                   </td>
                   <td className="px-4 py-2.5 text-ink-700">{c.hours != null ? c.hours : "—"}</td>
+                  <td className="px-4 py-2.5">
+                    <ClockLocationBadge entry={c} />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -319,6 +457,55 @@ export default function EmployeeDetail() {
           onClose={() => setEditingEntry(null)}
         />
       )}
+
+      {editingProfile && (
+        <EditTeamMemberModal
+          employee={employee}
+          onClose={() => setEditingProfile(false)}
+          onSave={(fields) => {
+            updateEmployee(employee.id, fields);
+            setEditingProfile(false);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+// Summarizes a clock log row's geofence check (see evaluateClockLocation in
+// mockData.js) into one badge — checked against both the clock-in AND the
+// clock-out scan, since either one being off-site or missing a GPS fix is
+// worth a manager's attention. "Flagged" never means the scan was rejected —
+// clockScan always allows it — just that this one is worth a look. Rows
+// logged before this feature existed have no location fields at all, so
+// those show a plain dash rather than a fabricated flag either way.
+function ClockLocationBadge({ entry }) {
+  const hasAnyData = entry.inLocationFlagged !== null && entry.inLocationFlagged !== undefined;
+  if (!hasAnyData) {
+    return <span className="text-ink-300">—</span>;
+  }
+  const outApplies = entry.clockedOutAt && entry.outLocationFlagged !== null && entry.outLocationFlagged !== undefined;
+  const flagged = entry.inLocationFlagged || (outApplies && entry.outLocationFlagged);
+
+  const describe = (label, dist, wasFlagged) => {
+    if (!wasFlagged) return `${label}: on-site (${dist} ft from shop)`;
+    return dist === null ? `${label}: no location on file` : `${label}: ${dist} ft from shop`;
+  };
+  const title = [
+    describe("Clock-in", entry.inDistanceFt, entry.inLocationFlagged),
+    outApplies ? describe("Clock-out", entry.outDistanceFt, entry.outLocationFlagged) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <span
+      title={title}
+      className={`text-[10px] font-semibold rounded-full px-2 py-0.5 ${
+        flagged ? "bg-bad-50 text-bad-600" : "bg-good-50 text-good-600"
+      }`}
+    >
+      {flagged ? "Flagged" : "On-site"}
+    </span>
   );
 }

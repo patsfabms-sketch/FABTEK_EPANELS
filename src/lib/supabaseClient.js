@@ -31,3 +31,4 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 });
 
 export const PDF_BUCKET = "assemblyos-pdfs";
+export const PHOTO_BUCKET = "assemblyos-employee-photos";
