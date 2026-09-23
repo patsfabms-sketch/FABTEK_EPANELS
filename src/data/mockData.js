@@ -842,7 +842,7 @@ export function computeWeeklyPerformance(workHistory, employeeId, { weeks = 8, n
 // this employee's overall Flagged rate, and how many times a Rework entry
 // (see the Rework-attribution update) has named them as the root cause —
 // both worth a manager's attention even though neither is a "stage."
-const INSIGHT_MIN_SESSIONS = 3;
+export const INSIGHT_MIN_SESSIONS = 3;
 const INSIGHT_MIN_PCT_DIFF = 0.15;
 
 export function computeEmployeeInsights(workHistory, employeeId) {
@@ -882,6 +882,73 @@ export function computeEmployeeInsights(workHistory, employeeId) {
     flaggedRate: mine.length > 0 ? Number(((flaggedCount / mine.length) * 100).toFixed(1)) : 0,
     reworkAttributedCount,
   };
+}
+
+// A leaderboard for every production stage — 1st place through however many
+// technicians qualify, "who's best at this task" made visible at a glance
+// instead of buried inside each person's own profile. Ranked by the same
+// per-employee, per-stage numbers computeStageStats/computeEmployeeInsights
+// already compute — nothing new is tracked, this just re-sorts real logged
+// history across the whole roster.
+//
+// Ranking metric, per stage: for Route/Terminate (CONNECT_STAGE_KEY), rank
+// by connections credited per hour, descending — that's this app's existing
+// measure of real terminating output (Update 9's connections/hour rule, the
+// Analytics stage cards' secondary line), and a fairer "who's fastest" than
+// raw avgHours for a stage whose session length varies with how big the
+// panel was. Every other stage has no per-session size signal to normalize
+// by, so it's ranked by average hours per session, ascending — faster is
+// better, same "lower avgHours is better" reading computeEmployeeInsights
+// already uses for strengths/improvements.
+//
+// Same INSIGHT_MIN_SESSIONS qualifying bar as the Strengths/Improvements
+// card, and for the same reason: one lucky fast session (or one unlucky
+// slow one) shouldn't hand someone a #1 or bury them in last place. A
+// technician under the minimum at a given stage simply doesn't appear on
+// that stage's board yet — not ranked last, since that would misrepresent
+// "not enough data" as "worst." Ties (identical avgHours or
+// connectionsPerHour) are broken by whoever has logged more sessions at
+// that stage, since that number is the more statistically reliable one of
+// the two. A stage nobody has cleared the minimum at yet doesn't appear on
+// the leaderboard at all, same "don't fabricate a ranking with no real
+// data behind it" rule the rest of this app already follows.
+export function computeStageLeaderboards(workHistory, employees, { minSessions = INSIGHT_MIN_SESSIONS } = {}) {
+  const byStageKey = new Map();
+  employees.forEach((emp) => {
+    computeStageStats(workHistory, emp.id).forEach((s) => {
+      if (s.sessions < minSessions) return;
+      if (!byStageKey.has(s.key)) byStageKey.set(s.key, []);
+      byStageKey.get(s.key).push({
+        employee: emp,
+        sessions: s.sessions,
+        avgHours: s.avgHours,
+        connectionsPerHour: s.connectionsPerHour,
+        totalConnections: s.totalConnections,
+      });
+    });
+  });
+
+  return productionStages
+    .map((stage) => {
+      const rows = byStageKey.get(stage.key);
+      if (!rows || rows.length === 0) return null;
+      const rankedBy = stage.key === CONNECT_STAGE_KEY ? "connectionsPerHour" : "avgHours";
+      const sorted = [...rows].sort((a, b) => {
+        if (rankedBy === "connectionsPerHour") {
+          if (b.connectionsPerHour !== a.connectionsPerHour) return b.connectionsPerHour - a.connectionsPerHour;
+        } else if (a.avgHours !== b.avgHours) {
+          return a.avgHours - b.avgHours;
+        }
+        return b.sessions - a.sessions;
+      });
+      return {
+        key: stage.key,
+        label: stage.label,
+        rankedBy,
+        rows: sorted.map((r, i) => ({ ...r, rank: i + 1 })),
+      };
+    })
+    .filter(Boolean);
 }
 
 // "Start to finish" build-time projections — for every build that's
@@ -1187,6 +1254,12 @@ export function computeBlendedLaborRate(workHistory, employees) {
 export const OVERTIME_THRESHOLD_HOURS = 40;
 export const OVERTIME_MULTIPLIER = 1.5;
 
+// Where a "getting close to 40" warning kicks in on capacity-visibility
+// views (Team roster) — 80% of the overtime threshold. A named constant
+// rather than a hardcoded 32 so the two stay in sync if the threshold ever
+// changes, and so the warning point itself is a one-line change on its own.
+export const CAPACITY_WARNING_HOURS = Number((OVERTIME_THRESHOLD_HOURS * 0.8).toFixed(2));
+
 // Midnight (local time) of the Wednesday that starts the payroll week
 // containing `date`.
 export function payrollWeekStart(date = new Date()) {
@@ -1314,5 +1387,100 @@ export function computeWeeklyProfitAndLoss(panels, workHistory, clockLog, employ
     profit,
     marginPct: revenue > 0 ? Math.round((profit / revenue) * 100) : null,
     shippedPanels,
+  };
+}
+
+// Attributes overtime PREMIUM cost (the extra OVERTIME_MULTIPLIER-1 on top
+// of what those hours would have cost at straight time — the actual added
+// cost overtime causes, which is the number that matters for "should this
+// job be priced higher") across the panels an employee logged work on
+// during a week they earned overtime, in proportion to how many task hours
+// they logged on each panel that week.
+//
+// This is a deliberate approximation, not a strict "which specific panel
+// pushed them over 40 hours" determination: overtime itself is computed
+// from clocked ATTENDANCE hours (clockedHoursInRange/computeOvertimePay),
+// while this allocates against logged TASK hours (workHistory) for the
+// same week — task hours run lower than attendance hours (breaks and
+// non-productive time are excluded from them) and aren't necessarily in
+// the same order the clock accumulated. A proportional split was chosen
+// over a stricter chronological one (lining up each session's timestamp
+// against the exact moment the employee's clocked hours crossed 40) because
+// it's simple to explain to a non-technical reader and degrades honestly:
+// a week where an employee earned overtime but logged no task hours at all
+// (rare, but possible — e.g. training, or a data gap) can't be attributed
+// to any panel, and is called out separately as unattributedOvertimeHours/
+// Cost rather than guessed at or silently dropped.
+export function computeOvertimeCostByBuild(panels, workHistory, clockLog, employees) {
+  const panelByBuildId = new Map();
+  panels.forEach((p) => {
+    if (!panelByBuildId.has(p.buildId)) {
+      panelByBuildId.set(p.buildId, { buildId: p.buildId, id: p.id, jobNumber: p.jobNumber, customer: p.customer });
+    }
+  });
+
+  const byBuild = new Map();
+  let unattributedOvertimeHours = 0;
+  let unattributedOvertimeCost = 0;
+  let totalOvertimeHours = 0;
+  let totalOvertimePremiumCost = 0;
+
+  employees.forEach((emp) => {
+    // Every payroll week this employee has any clock activity in — checking
+    // both the clock-in's week and (when different) the clock-out's week so
+    // a shift spanning the Tue-night/Wed boundary isn't missed on either side.
+    const weekKeys = new Set();
+    clockLog
+      .filter((c) => c.employeeId === emp.id)
+      .forEach((c) => {
+        if (c.clockedInAt) weekKeys.add(payrollWeekKey(new Date(c.clockedInAt)));
+        if (c.clockedOutAt) weekKeys.add(payrollWeekKey(new Date(c.clockedOutAt)));
+      });
+
+    weekKeys.forEach((wk) => {
+      const { start, end } = payrollWeekRange(new Date(`${wk}T00:00:00`));
+      const { overtimeHours } = computeOvertimePay(clockLog, emp, start, end);
+      if (overtimeHours <= 0) return;
+
+      totalOvertimeHours += overtimeHours;
+      const premiumCost = Number((overtimeHours * (emp.payRate || 0) * (OVERTIME_MULTIPLIER - 1)).toFixed(2));
+      totalOvertimePremiumCost += premiumCost;
+
+      const weekSessions = workHistory.filter((h) => {
+        if (h.employeeId !== emp.id || !h.createdAt) return false;
+        const t = new Date(h.createdAt).getTime();
+        return !Number.isNaN(t) && t >= start && t < end;
+      });
+      const weekTaskHours = weekSessions.reduce((s, h) => s + (h.hours || 0), 0);
+
+      if (weekTaskHours <= 0) {
+        unattributedOvertimeHours += overtimeHours;
+        unattributedOvertimeCost += premiumCost;
+        return;
+      }
+
+      weekSessions.forEach((h) => {
+        const share = (h.hours || 0) / weekTaskHours;
+        if (share <= 0) return;
+        const info = panelByBuildId.get(h.buildId) || { buildId: h.buildId, id: h.buildId, jobNumber: "", customer: "" };
+        if (!byBuild.has(h.buildId)) byBuild.set(h.buildId, { ...info, otHours: 0, otCost: 0 });
+        const b = byBuild.get(h.buildId);
+        b.otHours += overtimeHours * share;
+        b.otCost += premiumCost * share;
+      });
+    });
+  });
+
+  const builds = Array.from(byBuild.values())
+    .map((b) => ({ ...b, otHours: Number(b.otHours.toFixed(2)), otCost: Number(b.otCost.toFixed(2)) }))
+    .filter((b) => b.otHours > 0)
+    .sort((a, b) => b.otCost - a.otCost);
+
+  return {
+    totalOvertimeHours: Number(totalOvertimeHours.toFixed(2)),
+    totalOvertimePremiumCost: Number(totalOvertimePremiumCost.toFixed(2)),
+    unattributedOvertimeHours: Number(unattributedOvertimeHours.toFixed(2)),
+    unattributedOvertimeCost: Number(unattributedOvertimeCost.toFixed(2)),
+    builds,
   };
 }

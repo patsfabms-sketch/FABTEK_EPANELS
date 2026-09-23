@@ -3,8 +3,18 @@ import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import QRCode from "qrcode";
 import { useApp } from "../../context/AppContext";
-import { ROLES, ROLE_META, isClockedIn, isoWeekKey, clockQrValue, payrollWeekRange, clockedHoursInRange } from "../../data/mockData";
-import { Card, SectionTitle, RoleBadge, Button, Modal, Avatar, MaskedValue } from "../../components/ui";
+import {
+  ROLES,
+  ROLE_META,
+  isClockedIn,
+  isoWeekKey,
+  clockQrValue,
+  payrollWeekRange,
+  clockedHoursInRange,
+  OVERTIME_THRESHOLD_HOURS,
+  CAPACITY_WARNING_HOURS,
+} from "../../data/mockData";
+import { Card, SectionTitle, StatCard, RoleBadge, Button, Modal, Avatar, MaskedValue } from "../../components/ui";
 import EditTeamMemberModal from "../../components/EditTeamMemberModal";
 
 export default function Team() {
@@ -35,11 +45,20 @@ export default function Team() {
   // introducing a third definition of "week."
   const { start: weekStart, end: weekEnd } = useMemo(() => payrollWeekRange(new Date(now)), [now]);
 
+  // Unfiltered — every employee's hours for the current payroll week,
+  // whether or not the roster search box is narrowing what's shown below.
+  // This is what the shop-wide capacity summary is computed from, so
+  // typing into the search box never changes the team-wide numbers.
+  const withHours = useMemo(
+    () =>
+      employees.map((e) => ({
+        ...e,
+        clockedThisWeek: clockedHoursInRange(clockLog, e.id, weekStart, weekEnd, { now }),
+      })),
+    [employees, clockLog, weekStart, weekEnd, now]
+  );
+
   const rows = useMemo(() => {
-    const withHours = employees.map((e) => ({
-      ...e,
-      clockedThisWeek: clockedHoursInRange(clockLog, e.id, weekStart, weekEnd, { now }),
-    }));
     const filtered = withHours.filter((e) =>
       e.name.toLowerCase().includes(query.toLowerCase()) || e.role.toLowerCase().includes(query.toLowerCase())
     );
@@ -50,7 +69,26 @@ export default function Team() {
       return sortDir === "asc" ? av - bv : bv - av;
     });
     return sorted;
-  }, [employees, clockLog, weekStart, weekEnd, now, query, sortKey, sortDir]);
+  }, [withHours, query, sortKey, sortDir]);
+
+  // Shop-wide "how much room is left before the crew starts costing
+  // overtime this week" — total capacity is every employee's own 40-hr
+  // threshold added up (not employees.length × 40 charged against people
+  // who aren't Panel Technicians differently — every role clocks in against
+  // the same shared Clock QR and the same OVERTIME_THRESHOLD_HOURS, so this
+  // stays one consistent number for the whole roster).
+  const capacity = useMemo(() => {
+    const totalClocked = withHours.reduce((s, e) => s + e.clockedThisWeek, 0);
+    const totalCapacity = withHours.length * OVERTIME_THRESHOLD_HOURS;
+    const atCapacity = withHours.filter((e) => e.clockedThisWeek >= OVERTIME_THRESHOLD_HOURS).length;
+    return {
+      totalClocked: Number(totalClocked.toFixed(1)),
+      totalCapacity,
+      remaining: Number(Math.max(0, totalCapacity - totalClocked).toFixed(1)),
+      utilizationPct: totalCapacity > 0 ? Math.round((totalClocked / totalCapacity) * 100) : 0,
+      atCapacity,
+    };
+  }, [withHours]);
 
   const roleCounts = useMemo(() => {
     const counts = {};
@@ -108,6 +146,32 @@ export default function Team() {
       </div>
 
       <SectionTitle
+        title="Team Capacity This Week"
+        subtitle={`Payroll week (Wed–Tue) of ${new Date(weekStart).toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+        })} — every employee's own ${OVERTIME_THRESHOLD_HOURS}-hr threshold added up`}
+      />
+      <div className="flex flex-wrap gap-4 mb-6">
+        <StatCard
+          label="Clocked This Week"
+          value={`${capacity.totalClocked} hrs`}
+          sub={`of ${capacity.totalCapacity} hrs capacity (${capacity.utilizationPct}%)`}
+        />
+        <StatCard
+          label="Remaining Capacity"
+          value={`${capacity.remaining} hrs`}
+          sub="before the whole crew hits 40 each"
+        />
+        <StatCard
+          label="Already at/over 40"
+          value={capacity.atCapacity}
+          sub={`of ${withHours.length} on the roster — any more of their time this week is overtime`}
+          accent={capacity.atCapacity > 0 ? "text-warn-600" : "text-ink-900"}
+        />
+      </div>
+
+      <SectionTitle
         title={`Roster (${rows.length})`}
         subtitle={`Click a column header to sort · Clocked hours are for the current payroll week (Wed–Tue), week of ${new Date(
           weekStart
@@ -151,7 +215,9 @@ export default function Team() {
                   <ClockStatusBadge clockLog={clockLog} employeeId={e.id} />
                 </td>
                 <td className="px-4 py-2.5 text-ink-600">{e.panel ?? "—"}</td>
-                <td className="px-4 py-2.5 text-ink-700 font-medium">{e.clockedThisWeek} hrs</td>
+                <td className="px-4 py-2.5">
+                  <CapacityCell hours={e.clockedThisWeek} />
+                </td>
                 <td className="px-4 py-2.5 text-ink-700 font-medium">
                   <MaskedValue value={`$${e.payRate?.toFixed(2)}/hr`} />
                 </td>
@@ -293,6 +359,30 @@ function ClockStatusBadge({ clockLog, employeeId }) {
       <span className="w-1.5 h-1.5 rounded-full bg-good-500 animate-pulse" />
       Since {new Date(open.clockedInAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
     </span>
+  );
+}
+
+// One employee's clocked-in-this-week hours as a small capacity bar against
+// the OVERTIME_THRESHOLD_HOURS ceiling — green with room to spare, amber once
+// they're within CAPACITY_WARNING_HOURS of the threshold, red once they've
+// hit it (any more this week is overtime). The bar itself is capped visually
+// at 100% width even if someone's already over, since overshooting the bar
+// doesn't communicate anything the red color + "over" text doesn't already.
+function CapacityCell({ hours }) {
+  const pct = Math.min(100, Math.round((hours / OVERTIME_THRESHOLD_HOURS) * 100));
+  const over = hours > OVERTIME_THRESHOLD_HOURS;
+  const barColor = hours >= OVERTIME_THRESHOLD_HOURS ? "bg-bad-500" : hours >= CAPACITY_WARNING_HOURS ? "bg-warn-500" : "bg-good-500";
+  const textColor = hours >= OVERTIME_THRESHOLD_HOURS ? "text-bad-600" : hours >= CAPACITY_WARNING_HOURS ? "text-warn-600" : "text-ink-700";
+  return (
+    <div className="min-w-[110px]">
+      <div className="flex items-center justify-between mb-1">
+        <span className={`text-[12px] font-semibold ${textColor}`}>{hours} hrs</span>
+        {over && <span className="text-[10px] font-semibold text-bad-600">+{Number((hours - OVERTIME_THRESHOLD_HOURS).toFixed(1))} OT</span>}
+      </div>
+      <div className="h-1.5 w-full rounded-full bg-paper-100 overflow-hidden">
+        <div className={`h-full rounded-full ${barColor}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
   );
 }
 

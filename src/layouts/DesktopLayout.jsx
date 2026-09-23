@@ -11,6 +11,7 @@ const NAV = [
   { to: "/team", label: "Team", icon: TeamIcon },
   { to: "/payroll", label: "Payroll", icon: PayrollIcon },
   { to: "/sessions", label: "Session Log", icon: SessionLogIcon },
+  { to: "/leaderboard", label: "Leaderboard", icon: LeaderboardIcon },
   { to: "/estimates", label: "Estimates", icon: EstimatesIcon },
   { to: "/get-app", label: "Get the App", icon: GetAppIcon },
 ];
@@ -147,6 +148,14 @@ function SessionLogIcon(props) {
     <svg {...iconProps(props)}>
       <path d="M6 3.5h12a1 1 0 0 1 1 1V19a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z" />
       <path d="M8.5 8h7M8.5 11.5h7M8.5 15h4.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+function LeaderboardIcon(props) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M8 20v-6.5M12 20V4M16 20v-9.5" strokeLinecap="round" />
+      <path d="M6 13.5h4M10 4h4M14 10.5h4" strokeLinecap="round" />
     </svg>
   );
 }

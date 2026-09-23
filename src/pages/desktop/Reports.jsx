@@ -20,6 +20,7 @@ import {
   computeBlendedLaborRate,
   computeNonProductiveSummary,
   computeAvgBuildTime,
+  computeOvertimeCostByBuild,
   estimateBuildHours,
   isShippedSessionRow,
   productionStages,
@@ -171,6 +172,14 @@ export default function Reports() {
   // something that jumps around depending on whatever date range happens
   // to be selected on the page right now.
   const avgBuildTime = useMemo(() => computeAvgBuildTime(panels, workHistory), [panels, workHistory]);
+  // Same all-time reasoning as avgBuildTime just above — which panels ran
+  // into overtime, and how much it actually cost, is for pricing future
+  // jobs, not something that should shrink to whatever date range is
+  // selected on the page right now.
+  const overtimeByBuild = useMemo(
+    () => computeOvertimeCostByBuild(panels, workHistory, clockLog, employees),
+    [panels, workHistory, clockLog, employees]
+  );
   const allTimeStageStats = useMemo(() => computeTeamStageStats(workHistory), [workHistory]);
   const [showBuildTimeDetail, setShowBuildTimeDetail] = useState(false);
   // Which stages a hypothetical panel's routing includes, for the "Estimate
@@ -481,6 +490,65 @@ export default function Reports() {
           onClose={() => setShowBuildTimeDetail(false)}
         />
       )}
+
+      <SectionTitle
+        title="Overtime Cost by Panel"
+        subtitle="All-time — which panels' builds ran into overtime, and roughly how much extra that cost, for pricing similar jobs going forward"
+      />
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+        <StatCard label="Total OT Hours" value={overtimeByBuild.totalOvertimeHours} sub="Across the whole crew, all-time" />
+        <StatCard
+          label="Extra Cost From OT"
+          value={formatCurrency(overtimeByBuild.totalOvertimePremiumCost)}
+          sub="Just the 0.5x premium — not full OT pay"
+          accent={overtimeByBuild.totalOvertimePremiumCost > 0 ? "text-warn-600" : "text-ink-900"}
+        />
+        <StatCard
+          label="Panels Affected"
+          value={overtimeByBuild.builds.length}
+          sub="Had at least some OT cost attributed to them"
+        />
+      </div>
+      <Card padded={false} className="overflow-x-auto mb-2">
+        {overtimeByBuild.builds.length === 0 ? (
+          <p className="text-xs text-ink-400 text-center py-8">No overtime has been attributed to a specific panel yet.</p>
+        ) : (
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
+                <th className="px-4 py-3 font-semibold">Panel</th>
+                <th className="px-4 py-3 font-semibold">Job #</th>
+                <th className="px-4 py-3 font-semibold">Customer</th>
+                <th className="px-4 py-3 font-semibold">OT Hours (attributed)</th>
+                <th className="px-4 py-3 font-semibold">Extra Cost From OT</th>
+              </tr>
+            </thead>
+            <tbody>
+              {overtimeByBuild.builds.map((b, i) => (
+                <tr key={b.buildId} className={`border-b border-paper-100 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
+                  <td className="px-4 py-2.5 text-ink-900 font-medium">#{b.id}</td>
+                  <td className="px-4 py-2.5 text-ink-600">{b.jobNumber || "—"}</td>
+                  <td className="px-4 py-2.5 text-ink-600">{b.customer || "—"}</td>
+                  <td className="px-4 py-2.5 text-ink-700 font-medium">{b.otHours}</td>
+                  <td className="px-4 py-2.5 text-warn-600 font-semibold">{formatCurrency(b.otCost)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+      <p className="text-[11px] text-ink-400 mt-3 mb-8">
+        "Extra Cost From OT" is just the added 0.5x premium those hours cost beyond straight time — the actual
+        incremental cost overtime causes, which is the number worth factoring into a quote. For a week an employee
+        earned overtime, that premium is split across the panels they logged task hours on that same week, in
+        proportion to how many hours they logged on each — an approximation (overtime itself is based on clocked
+        attendance time, not task time), not a claim that a specific hour caused a specific panel to go into
+        overtime.
+        {overtimeByBuild.unattributedOvertimeHours > 0 &&
+          ` ${overtimeByBuild.unattributedOvertimeHours} OT hrs (${formatCurrency(
+            overtimeByBuild.unattributedOvertimeCost
+          )}) couldn't be tied to any panel — weeks with overtime but no task hours logged, so nothing to allocate it against.`}
+      </p>
 
       <SectionTitle
         title="Employee Performance"
