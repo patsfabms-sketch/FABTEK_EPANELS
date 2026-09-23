@@ -90,14 +90,26 @@ export default function EditClockEntryModal({ entry, employeeName, onClose }) {
           : "A clock-in time is required."}
       </p>
 
-      {previewReasons.length > 0 && !verified && (
-        <div className="rounded-lg bg-warn-50 border border-warn-200 px-3 py-2.5 mb-3">
-          <p className="text-[11px] font-semibold text-warn-700 mb-1">Needs review</p>
-          <ul className="text-[11px] text-warn-700 space-y-0.5 list-disc list-inside">
+      {previewReasons.length > 0 && (
+        <div
+          className={`rounded-lg border px-3 py-2.5 mb-3 ${
+            verified ? "bg-brand-50 border-brand-200" : "bg-warn-50 border-warn-200"
+          }`}
+        >
+          <p className={`text-[11px] font-semibold mb-1 ${verified ? "text-brand-700" : "text-warn-700"}`}>
+            {verified ? "Verified — will still count as this much" : "Needs review"}
+          </p>
+          <ul className={`text-[11px] space-y-0.5 list-disc list-inside ${verified ? "text-brand-700" : "text-warn-700"}`}>
             {previewReasons.map((r) => (
               <li key={r}>{r}</li>
             ))}
           </ul>
+          {!stillOpenNote && previewDurationHours > 24 && (
+            <p className={`text-[11px] font-semibold mt-1.5 ${verified ? "text-brand-700" : "text-warn-700"}`}>
+              That's over 24 hours straight — double-check Clocked Out has the right DATE, not just the right time
+              (easy to leave it on today when the clock-in was actually yesterday or earlier).
+            </p>
+          )}
         </div>
       )}
 
@@ -111,9 +123,10 @@ export default function EditClockEntryModal({ entry, employeeName, onClose }) {
         <span className="text-xs">
           <span className="font-semibold text-ink-700">Verified</span>
           <span className="block text-ink-500">
-            Confirms a long duration or location flag on this entry is legitimate, without changing the times above.
-            An entry over {LONG_CLOCK_ENTRY_HOURS} hrs or with a location flag stays on the Flagged tab until this is
-            checked.
+            Confirms a long duration or location flag on this entry is legitimate, without changing the times above
+            — the times are still what feeds Payroll and Non-Productive Time, so if the duration shown is actually
+            wrong, fix Clocked In/Out instead of (or in addition to) checking this. An entry over{" "}
+            {LONG_CLOCK_ENTRY_HOURS} hrs or with a location flag stays on the Flagged tab until this is checked.
           </span>
         </span>
       </label>

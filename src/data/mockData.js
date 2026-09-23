@@ -1263,3 +1263,56 @@ export function computePayrollSummary(clockLog, employees, rangeStart, rangeEnd,
     .map((e) => ({ employee: e, ...computeOvertimePay(clockLog, e, rangeStart, rangeEnd, { now }) }))
     .sort((a, b) => b.totalPay - a.totalPay);
 }
+
+// A simple weekly profit-and-loss for the Payroll page — Pat's own words:
+// "a reflection of payroll along with the work that is logged complete...
+// basically like a profit and loss." Pairs the same week's real payroll
+// cost (computePayrollSummary above — clocked hours, overtime included,
+// the exact number the rest of the Payroll page already shows) against
+// revenue recognized that week.
+//
+// "Work logged complete" is read as panels that actually SHIPPED during
+// this payroll week — this app's one existing, already-established
+// definition of "this job is actually done" (isShippedSessionRow/
+// SHIP_STAGE_LABEL, used for the "Panels Shipped" stat and the build-time
+// projections), not any one completed session/stage along the way. A
+// panel's price isn't earned bit by bit as steps get checked off — it's
+// billed once the whole thing ships — so that's the revenue event this
+// pairs against payroll cost. If Pat actually meant something broader
+// (every completed session, not just a full ship), that's a quick
+// follow-up — flagged here since it's a real judgment call, not a fact.
+//
+// A build with more than one completed Wrap row on file (shouldn't
+// normally happen) only counts its price once — de-duplicated by buildId
+// — so a corrected/re-logged completion can't double-count revenue.
+export function computeWeeklyProfitAndLoss(panels, workHistory, clockLog, employees, rangeStart, rangeEnd, { now = Date.now() } = {}) {
+  const shippedBuildIds = new Set(
+    workHistory
+      .filter((h) => {
+        if (!isShippedSessionRow(h) || !h.createdAt) return false;
+        const t = new Date(h.createdAt).getTime();
+        return !Number.isNaN(t) && t >= rangeStart && t < rangeEnd;
+      })
+      .map((h) => h.buildId)
+  );
+  const shippedPanels = panels
+    .filter((p) => shippedBuildIds.has(p.buildId))
+    .map((p) => ({ buildId: p.buildId, id: p.id, jobNumber: p.jobNumber, customer: p.customer, price: p.price || 0 }))
+    .sort((a, b) => b.price - a.price);
+  const revenue = Number(shippedPanels.reduce((s, p) => s + p.price, 0).toFixed(2));
+
+  const payrollCost = Number(
+    computePayrollSummary(clockLog, employees, rangeStart, rangeEnd, { now })
+      .reduce((s, r) => s + r.totalPay, 0)
+      .toFixed(2)
+  );
+
+  const profit = Number((revenue - payrollCost).toFixed(2));
+  return {
+    revenue,
+    payrollCost,
+    profit,
+    marginPct: revenue > 0 ? Math.round((profit / revenue) * 100) : null,
+    shippedPanels,
+  };
+}

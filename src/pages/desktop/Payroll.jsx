@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useApp } from "../../context/AppContext";
 import {
   computePayrollSummary,
+  computeWeeklyProfitAndLoss,
   payrollWeekStart,
   payrollWeekRange,
   OVERTIME_THRESHOLD_HOURS,
@@ -18,7 +19,7 @@ import { Card, SectionTitle, StatCard, RoleBadge, Avatar, Button, formatCurrency
 // clocked hours, not task hours" comment on computeOvertimePay in
 // mockData.js).
 export default function Payroll() {
-  const { employees, clockLog } = useApp();
+  const { employees, clockLog, panels, workHistory } = useApp();
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 60000);
@@ -60,6 +61,15 @@ export default function Payroll() {
         { totalHours: 0, overtimeHours: 0, totalPay: 0, overtimePay: 0, inOvertime: 0 }
       ),
     [rows]
+  );
+
+  // Profit & loss for this same week — revenue from panels that shipped
+  // during it against this week's real payroll cost (totals.totalPay
+  // above). See computeWeeklyProfitAndLoss's own comment for exactly what
+  // "work logged complete" is read to mean here.
+  const pnl = useMemo(
+    () => computeWeeklyProfitAndLoss(panels, workHistory, clockLog, employees, start, end, { now }),
+    [panels, workHistory, clockLog, employees, start, end, now]
   );
 
   return (
@@ -160,12 +170,70 @@ export default function Payroll() {
           </table>
         )}
       </Card>
-      <p className="text-[11px] text-ink-400 mt-3">
+      <p className="text-[11px] text-ink-400 mt-3 mb-8">
         Based on clocked (attendance) time from the shared Clock QR — includes paid break time already inside a
         clock-in/out span, same as attendance is tracked everywhere else in this app. An employee still clocked in
         right now has their open entry capped at the current time, not projected forward. This is a payroll report
         only; it doesn't change the pay rate used elsewhere (panel cost estimates, the Analytics blended labor rate)
         since those are about what a panel costs to build, not what payroll actually owes for the week.
+      </p>
+
+      <SectionTitle
+        title="Profit & Loss — This Week"
+        subtitle="Revenue from panels that shipped this week vs. this week's real payroll cost (above)"
+      />
+      <div className="flex flex-wrap gap-4 mb-6">
+        <StatCard
+          label="Revenue Shipped"
+          value={formatCurrency(pnl.revenue)}
+          sub={`${pnl.shippedPanels.length} panel${pnl.shippedPanels.length === 1 ? "" : "s"} shipped`}
+        />
+        <StatCard label="Payroll Cost" value={formatCurrency(pnl.payrollCost)} sub="Same total as above" />
+        <StatCard
+          label="Profit"
+          value={formatCurrency(pnl.profit)}
+          sub={pnl.marginPct !== null ? `${pnl.marginPct}% margin` : "No revenue shipped this week"}
+          accent={pnl.profit > 0 ? "text-good-600" : pnl.profit < 0 ? "text-bad-600" : "text-ink-900"}
+        />
+      </div>
+
+      <Card padded={false} className="overflow-x-auto">
+        {pnl.shippedPanels.length === 0 ? (
+          <p className="text-xs text-ink-400 text-center py-8">
+            No panels shipped (completed Wrap) during this week — payroll cost this week isn't backed by any revenue
+            recognized in the same week, which can be normal (work in progress on panels that'll ship later) or
+            worth a look if it keeps happening.
+          </p>
+        ) : (
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
+                <th className="px-4 py-3 font-semibold">Panel</th>
+                <th className="px-4 py-3 font-semibold">Job #</th>
+                <th className="px-4 py-3 font-semibold">Customer</th>
+                <th className="px-4 py-3 font-semibold">Revenue</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pnl.shippedPanels.map((p, i) => (
+                <tr key={p.buildId} className={`border-b border-paper-100 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
+                  <td className="px-4 py-2.5 text-ink-900 font-medium">#{p.id}</td>
+                  <td className="px-4 py-2.5 text-ink-600">{p.jobNumber || "—"}</td>
+                  <td className="px-4 py-2.5 text-ink-600">{p.customer || "—"}</td>
+                  <td className="px-4 py-2.5 text-ink-700 font-medium">{formatCurrency(p.price)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+      <p className="text-[11px] text-ink-400 mt-3">
+        "Shipped" means a completed Wrap session logged during this week — this app's existing definition of a
+        finished, billable panel (same one the Analytics build-time projections use). Revenue is each shipped
+        panel's estimate price; it isn't split across the weeks it was actually worked, so a panel worked over
+        several weeks shows all its revenue in the one week it shipped. This is labor cost only, same as the payroll
+        numbers above — materials, overhead, and any other cost aren't factored in, so "Profit" here means labor
+        margin, not true net profit.
       </p>
     </div>
   );
