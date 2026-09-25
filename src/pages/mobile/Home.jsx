@@ -62,6 +62,7 @@ export default function Home() {
   const [selectedStage, setSelectedStage] = useState(null);
   const [useCamera, setUseCamera] = useState(true);
   const [scanError, setScanError] = useState("");
+  const [startError, setStartError] = useState("");
 
   const [showClockScanner, setShowClockScanner] = useState(false);
   const [clockScanAttempt, setClockScanAttempt] = useState(0);
@@ -146,6 +147,7 @@ export default function Home() {
     setScannedPanel(null);
     setSelectedStage(null);
     setScanError("");
+    setStartError("");
     setUseCamera(true);
   }
 
@@ -180,7 +182,19 @@ export default function Home() {
 
   function handleStart() {
     const target = connectionsForPanel(scannedPanel, pricePerConnection);
-    startSession(`#${scannedPanel.id}`, selectedStage, target, scannedPanel.buildId);
+    const result = startSession(`#${scannedPanel.id}`, selectedStage, target, scannedPanel.buildId);
+    if (result?.blocked) {
+      // Same technician already has a live session — almost always the same
+      // login open on another phone/tab. Don't overwrite it silently; tell
+      // them exactly where it's open so they can go finish it there, or flag
+      // it for a manager to end if it's actually stuck.
+      setStartError(
+        `You're already in a session on Panel ${result.existing.panel}${
+          result.existing.stage ? ` · ${result.existing.stage}` : ""
+        } — looks like it's still open on another device. Finish it there, or ask your manager to end it from that panel's detail view.`
+      );
+      return;
+    }
     closeScanner();
     navigate("/mobile/session");
   }
@@ -370,6 +384,7 @@ export default function Home() {
                   onClick={() => {
                     setScannedPanel(null);
                     setSelectedStage(null);
+                    setStartError("");
                   }}
                   className="text-[11px] font-semibold text-brand-600 mb-3"
                 >
@@ -397,7 +412,10 @@ export default function Home() {
                   {productionStages.map((s) => (
                     <button
                       key={s.key}
-                      onClick={() => setSelectedStage(s.label)}
+                      onClick={() => {
+                        setSelectedStage(s.label);
+                        setStartError("");
+                      }}
                       className={`rounded-lg border px-3 py-2.5 text-sm font-medium text-left ${
                         selectedStage === s.label
                           ? "border-brand-500 bg-brand-50 text-brand-700"
@@ -415,6 +433,12 @@ export default function Home() {
                       This task is already {stageProgress}% complete. You'll report how much further you get when you
                       stop.
                     </p>
+                  </div>
+                )}
+
+                {startError && (
+                  <div className="rounded-lg bg-bad-50 border border-bad-100 px-3 py-2.5 mb-4">
+                    <p className="text-[11px] font-semibold text-bad-600">{startError}</p>
                   </div>
                 )}
 

@@ -1318,7 +1318,23 @@ export function AppProvider({ children }) {
   // when they stop. taskProgress() sums those contributions across everyone
   // who has worked the task, so credit for a task finished across multiple
   // people/days splits by what each person actually reported.
+  // Refuses to start a second concurrent session for the same technician.
+  // `activeSessions` is the shared, realtime-synced source of truth (one row
+  // per employeeId) — so this catches the case device-local `session.active`
+  // can't: the same PIN logged in on a second phone/tab while the first
+  // device's session is still open. Returns {blocked: true, existing} so the
+  // caller can show the technician which panel/stage is holding it open,
+  // rather than silently overwriting the shared row (which would strand the
+  // first device's session with no way to close it out cleanly) or fabricating
+  // an end to it. A stuck/orphaned row still has the same two ways out this
+  // app already offers: resume it on the original device (its local session
+  // is device-persisted, see `device?.session` above), or have a manager end
+  // it from that panel's detail view (adminEndSession).
   function startSession(panel, stage, targetConnections = null, buildId = null) {
+    const existing = activeSessions.find((s) => s.employeeId === currentUserId);
+    if (existing) {
+      return { blocked: true, existing };
+    }
     const startingProgress = taskProgress(workHistory, panel, stage, buildId);
     const startedAt = Date.now();
     setSession({ active: true, panel, stage, targetConnections, buildId, startingProgress, startedAt, notes: "" });
@@ -1337,6 +1353,7 @@ export function AppProvider({ children }) {
     logActivity(`started ${stage.toLowerCase()} session`, `Panel ${panel}`, {
       who: currentUser?.name ?? "Technician",
     });
+    return { blocked: false };
   }
 
   function setSessionNotes(notes) {
