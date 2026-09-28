@@ -1698,21 +1698,49 @@ export function computePayrollSummary(clockLog, employees, rangeStart, rangeEnd,
 // A build with more than one completed Wrap row on file (shouldn't
 // normally happen) only counts its price once — de-duplicated by buildId
 // — so a corrected/re-logged completion can't double-count revenue.
+//
+// loggedByAdmin rows (AppContext.adminMarkPanelSent, the "Mark as Sent"
+// backlog tool from Update 32) are excluded from which WEEK a panel's
+// revenue lands in, same reasoning as computeWeekdayCapacityReport above:
+// that tool stamps both createdAt and endedAt with the day an admin
+// happened to click the button, not the panel's real historical ship
+// date (confirmed directly against the live data — see Update 34's
+// findings). A backlog of weeks- or months-old admin corrections cleared
+// in one sitting would otherwise all land in whichever single week that
+// cleanup happened, fabricating an impossible spike in that week's
+// revenue/panel count (exactly what surfaced live: 70+ "panels shipped"
+// and $60k+ "revenue" in a single week that never actually happened).
+// These builds still count everywhere a lifetime/all-time total is shown
+// (Dashboard's Avg Panels Shipped/Day, the Sent tab, Analytics build-time
+// projections) — only this week-by-week revenue-recognition view excludes
+// them, because there's no trustworthy week to honestly credit them to.
+// excludedAdminCorrections/-Revenue surface this so the exclusion is never
+// silent.
 export function computeWeeklyProfitAndLoss(panels, workHistory, clockLog, employees, rangeStart, rangeEnd, { now = Date.now() } = {}) {
+  const inRange = (h) => {
+    if (!isShippedSessionRow(h) || !h.createdAt) return false;
+    const t = new Date(h.createdAt).getTime();
+    return !Number.isNaN(t) && t >= rangeStart && t < rangeEnd;
+  };
   const shippedBuildIds = new Set(
-    workHistory
-      .filter((h) => {
-        if (!isShippedSessionRow(h) || !h.createdAt) return false;
-        const t = new Date(h.createdAt).getTime();
-        return !Number.isNaN(t) && t >= rangeStart && t < rangeEnd;
-      })
-      .map((h) => h.buildId)
+    workHistory.filter((h) => inRange(h) && !h.loggedByAdmin).map((h) => h.buildId)
   );
   const shippedPanels = panels
     .filter((p) => shippedBuildIds.has(p.buildId))
     .map((p) => ({ buildId: p.buildId, id: p.id, jobNumber: p.jobNumber, customer: p.customer, price: p.price || 0 }))
     .sort((a, b) => b.price - a.price);
   const revenue = Number(shippedPanels.reduce((s, p) => s + p.price, 0).toFixed(2));
+
+  const excludedAdminBuildIds = new Set(
+    workHistory.filter((h) => inRange(h) && h.loggedByAdmin && !shippedBuildIds.has(h.buildId)).map((h) => h.buildId)
+  );
+  const excludedAdminCorrections = excludedAdminBuildIds.size;
+  const excludedAdminRevenue = Number(
+    panels
+      .filter((p) => excludedAdminBuildIds.has(p.buildId))
+      .reduce((s, p) => s + (p.price || 0), 0)
+      .toFixed(2)
+  );
 
   const payrollCost = Number(
     computePayrollSummary(clockLog, employees, rangeStart, rangeEnd, { now })
@@ -1727,6 +1755,8 @@ export function computeWeeklyProfitAndLoss(panels, workHistory, clockLog, employ
     profit,
     marginPct: revenue > 0 ? Math.round((profit / revenue) * 100) : null,
     shippedPanels,
+    excludedAdminCorrections,
+    excludedAdminRevenue,
   };
 }
 

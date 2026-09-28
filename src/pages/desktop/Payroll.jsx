@@ -234,6 +234,15 @@ export default function Payroll() {
         several weeks shows all its revenue in the one week it shipped. This is labor cost only, same as the payroll
         numbers above — materials, overhead, and any other cost aren't factored in, so "Profit" here means labor
         margin, not true net profit.
+        {pnl.excludedAdminCorrections > 0 && (
+          <>
+            {" "}This week also excludes {pnl.excludedAdminCorrections} panel
+            {pnl.excludedAdminCorrections === 1 ? "" : "s"} ({formatCurrency(pnl.excludedAdminRevenue)}) marked
+            "Sent" via the admin backlog tool during this window — those corrections are stamped with the day they
+            were entered, not the panel's real ship date, so counting them here would fabricate this week's
+            numbers.
+          </>
+        )}
       </p>
     </div>
   );
