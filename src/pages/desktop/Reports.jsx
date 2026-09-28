@@ -22,6 +22,7 @@ import {
   computeAvgBuildTime,
   computePanelsPerDayAvg,
   computeOvertimeCostByBuild,
+  computeStageConcurrency,
   estimateBuildHours,
   isShippedSessionRow,
   productionStages,
@@ -42,12 +43,13 @@ const RANGE_OPTIONS = [
 const ROLE_FILTERS = ["All Roles", ...Object.values(ROLES)];
 
 export default function Reports() {
-  const { employees, roleDefaults, workHistory, panels, clockLog } = useApp();
+  const { employees, roleDefaults, workHistory, panels, clockLog, activeSessions } = useApp();
   const [range, setRange] = useState(RANGE_OPTIONS[1]);
   const [roleFilter, setRoleFilter] = useState("All Roles");
   const [employeeFilter, setEmployeeFilter] = useState("All Employees");
   const [sortBy, setSortBy] = useState("hours");
   const [openStageKey, setOpenStageKey] = useState(null);
+  const [openConcurrencyKey, setOpenConcurrencyKey] = useState(null);
 
   // "Now" as component state (rather than calling Date.now() directly in
   // the render body) — same pattern used in AdminHome.jsx/PanelDetailModal.jsx.
@@ -122,6 +124,27 @@ export default function Reports() {
   // separately-computed find), so if the range/role/employee filters change
   // while a stage is open, the modal's rows stay in sync automatically.
   const openStage = stageStats.find((s) => s.key === openStageKey) ?? null;
+
+  // Pat's staffing question: "how many people are on the same task at the
+  // same time, on average" — a real interval-overlap computation (see
+  // computeStageConcurrency's comment in mockData.js), not just a
+  // headcount-per-session guess. Same filteredHistory as every other KPI on
+  // this page, so it respects whatever range/role/employee filter is set.
+  const stageConcurrency = useMemo(() => computeStageConcurrency(filteredHistory), [filteredHistory]);
+  const openConcurrencyStage = stageConcurrency.find((s) => s.key === openConcurrencyKey) ?? null;
+
+  // Right-now snapshot, independent of the range filter above — who's
+  // actually on each stage this exact moment, straight from the shared
+  // activeSessions table (same source Floor Status/Dashboard already read
+  // live). A quick sanity check alongside the historical average, not a
+  // replacement for it.
+  const liveStageHeadcount = useMemo(() => {
+    const counts = new Map();
+    activeSessions.forEach((s) => counts.set(s.stage, (counts.get(s.stage) || 0) + 1));
+    return productionStages
+      .map((stage) => ({ key: stage.key, label: stage.label, count: counts.get(stage.label) || 0 }))
+      .filter((s) => s.count > 0);
+  }, [activeSessions]);
 
   // The "how does everyone stack up" comparison table.
   const leaderboard = useMemo(
@@ -377,6 +400,68 @@ export default function Reports() {
           panels={panels}
           rangeLabel={range.label}
           onClose={() => setOpenStageKey(null)}
+        />
+      )}
+
+      <SectionTitle
+        title="Average People Per Task"
+        subtitle={`How many people are typically working the same step at the same time — use this to judge how many you actually need per task · ${range.label} — click a step to see the sessions behind it`}
+      />
+      {liveStageHeadcount.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <span className="text-[11px] font-semibold text-ink-500">Right now:</span>
+          {liveStageHeadcount.map((s) => (
+            <span
+              key={s.key}
+              className="text-[11px] font-medium rounded-full px-2.5 py-1 bg-brand-50 text-brand-700 border border-brand-100"
+            >
+              {s.label} · {s.count} {s.count === 1 ? "person" : "people"}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-2">
+        {stageConcurrency.length === 0 ? (
+          <p className="text-xs text-ink-400 text-center py-6 col-span-full">
+            No sessions with real start/end clock times in this range yet — see the note below.
+          </p>
+        ) : (
+          stageConcurrency.map((s) => (
+            <button
+              key={s.key}
+              onClick={() => setOpenConcurrencyKey(s.key)}
+              className="text-left rounded-xl2 bg-white border border-paper-200 shadow-card p-4 hover:border-brand-300 transition-colors"
+            >
+              <p className="text-[13px] font-semibold text-ink-900">{s.label}</p>
+              <p className="mt-1">
+                <span className="text-2xl font-bold text-brand-600">{s.avgConcurrent}</span>{" "}
+                <span className="text-xs font-medium text-ink-500">avg people at once</span>
+              </p>
+              <p className="text-[11px] text-ink-500 mt-1.5">
+                peak {s.peakConcurrent} at once · {s.sessionsCounted} session{s.sessionsCounted === 1 ? "" : "s"} ·{" "}
+                {formatNumber(s.activeHours)} hrs this step was actually being worked
+              </p>
+              <p className="text-[11px] font-semibold text-brand-600 mt-2.5">See sessions →</p>
+            </button>
+          ))
+        )}
+      </div>
+      <p className="text-[11px] text-ink-400 mb-8">
+        Only counts sessions with real start/end clock times on file (everything logged since the timestamp feature
+        shipped — an older session, or a "Mark as Sent" admin correction, has no real time span to place on a
+        timeline, so it's left out rather than guessed at). The average only counts time this step actually had
+        someone on it — idle nights/gaps aren't averaged in — so it answers "when this task is happening, how many
+        people are usually on it," not a number diluted by a 24-hour clock.
+      </p>
+
+      {openConcurrencyStage && (
+        <ConcurrencyDetailModal
+          stage={openConcurrencyStage}
+          rows={filteredHistory.filter((h) => h.stage === openConcurrencyStage.label && h.startedAt && h.endedAt)}
+          employees={employees}
+          panels={panels}
+          rangeLabel={range.label}
+          onClose={() => setOpenConcurrencyKey(null)}
         />
       )}
 
@@ -838,6 +923,84 @@ function StageDetailModal({ stage, rows, employees, panels, rangeLabel, onClose 
                       {h.status}
                     </span>
                   </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Modal>
+  );
+}
+
+// Drill-down behind an "Average People Per Task" card — every session
+// counted toward that stage's concurrency numbers, sorted chronologically by
+// start time (not most-recent-first, like StageDetailModal) specifically so
+// two overlapping sessions actually read as overlapping when scanned top to
+// bottom, rather than needing to be found somewhere in a plain date sort.
+function ConcurrencyDetailModal({ stage, rows, employees, panels, rangeLabel, onClose }) {
+  const employeeById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
+  const jobNumberByBuildId = useMemo(() => new Map(panels.map((p) => [p.buildId, p.jobNumber])), [panels]);
+  const sorted = useMemo(
+    () => [...rows].sort((a, b) => new Date(a.startedAt || 0).getTime() - new Date(b.startedAt || 0).getTime()),
+    [rows]
+  );
+
+  return (
+    <Modal onClose={onClose} widthClass="max-w-2xl">
+      <div className="flex items-start justify-between mb-1">
+        <div>
+          <h3 className="text-base font-bold text-ink-900">{stage.label} — Concurrency Detail</h3>
+          <p className="text-[11px] text-ink-500 mt-0.5">
+            {stage.avgConcurrent} people avg at once · peak {stage.peakConcurrent} · {rows.length} session
+            {rows.length === 1 ? "" : "s"} · {rangeLabel}
+          </p>
+        </div>
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="text-ink-400 hover:text-ink-700 text-xl leading-none px-1"
+        >
+          ×
+        </button>
+      </div>
+      <p className="text-[11px] text-ink-400 mb-4">
+        Every session behind this stage's average, in start-time order — scan down the Start–End column to see which
+        ones actually overlapped in real time.
+      </p>
+      <div className="rounded-lg border border-paper-200 overflow-x-auto max-h-[60vh] overflow-y-auto">
+        <table className="w-full text-[13px]">
+          <thead className="sticky top-0 bg-white">
+            <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
+              <th className="px-3 py-2.5 font-semibold">Date</th>
+              <th className="px-3 py-2.5 font-semibold">Start – End</th>
+              <th className="px-3 py-2.5 font-semibold">Technician</th>
+              <th className="px-3 py-2.5 font-semibold">Panel</th>
+              <th className="px-3 py-2.5 font-semibold text-right">Hours</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-3 py-8 text-center text-xs text-ink-400">
+                  No sessions with real start/end times in this range.
+                </td>
+              </tr>
+            ) : (
+              sorted.map((h, i) => (
+                <tr key={h.id} className={`border-b border-paper-50 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
+                  <td className="px-3 py-2 text-ink-700">{h.date}</td>
+                  <td className="px-3 py-2 text-ink-700">{formatTimeRange(h.startedAt, h.endedAt)}</td>
+                  <td className="px-3 py-2 text-ink-900 font-medium">
+                    {employeeById.get(h.employeeId)?.name ?? "Unknown"}
+                  </td>
+                  <td className="px-3 py-2 text-ink-600">
+                    {h.panel}
+                    {jobNumberByBuildId.get(h.buildId) && (
+                      <span className="text-ink-400"> · Job #{jobNumberByBuildId.get(h.buildId)}</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right text-ink-700">{h.hours}</td>
                 </tr>
               ))
             )}

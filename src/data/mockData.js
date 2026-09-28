@@ -1824,3 +1824,96 @@ export function computeOvertimeCostByBuild(panels, workHistory, clockLog, employ
     builds,
   };
 }
+
+// How many people are typically working the SAME stage at the SAME time —
+// Pat's staffing question: not "how long does a session take" (that's
+// computeTeamStageStats/Average Time per Step) but "how many hands does
+// this step actually need." Answered with a real interval-overlap sweep
+// over each stage's logged sessions, not a rough headcount/session-count
+// guess, since two technicians who each worked 4 hours on a stage today
+// could have been fully overlapping (2 people needed at once) or fully
+// back-to-back (1 person was enough) — only the real clock times tell you
+// which.
+//
+// Only rows with real startedAt/endedAt clock times count (see the
+// start/end-timestamp update) — a session logged before that field existed,
+// or a "Mark as Sent" admin correction (0-hour, no real time span —
+// excluded the same way computeTeamStageStats excludes it), can't be placed
+// on a timeline at all, so it's left out rather than guessed at.
+//
+// The average is time-weighted across only the periods when at least one
+// person was actually on that stage — nights, weekends, and any other gap
+// with zero concurrency are excluded from the denominator on purpose.
+// Otherwise a stage that's genuinely busy for a few real hours a day would
+// look artificially "low-staffed" just because it averages against a mostly
+// idle 24-hour clock, which would defeat the entire point of asking "when
+// this task is actually happening, how many people are on it."
+function concurrencyFromIntervals(intervals) {
+  const events = [];
+  intervals.forEach(({ start, end }) => {
+    if (!(end > start)) return; // defensive: a corrected/zero-length entry contributes nothing to the timeline
+    events.push([start, 1]);
+    events.push([end, -1]);
+  });
+  if (events.length === 0) return { avgConcurrent: 0, peakConcurrent: 0, activeHours: 0 };
+
+  // Ties sort ends (-1) before starts (+1) at the exact same instant, so a
+  // session that ends the moment another begins reads as sequential (never
+  // concurrent) rather than momentarily "2 people," which would overstate
+  // genuine overlap.
+  events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+
+  let concurrency = 0;
+  let prevT = events[0][0];
+  let weightedSum = 0;
+  let activeDurationMs = 0;
+  let peakConcurrent = 0;
+
+  events.forEach(([t, delta]) => {
+    if (t > prevT && concurrency > 0) {
+      const durMs = t - prevT;
+      weightedSum += concurrency * durMs;
+      activeDurationMs += durMs;
+    }
+    concurrency += delta;
+    peakConcurrent = Math.max(peakConcurrent, concurrency);
+    prevT = t;
+  });
+
+  return {
+    avgConcurrent: activeDurationMs > 0 ? weightedSum / activeDurationMs : peakConcurrent > 0 ? 1 : 0,
+    peakConcurrent,
+    activeHours: activeDurationMs / 3600000,
+  };
+}
+
+export function computeStageConcurrency(workHistory) {
+  const validRows = workHistory.filter((h) => {
+    if (h.loggedByAdmin || !h.stage || !h.startedAt || !h.endedAt) return false;
+    const s = new Date(h.startedAt).getTime();
+    const e = new Date(h.endedAt).getTime();
+    return !Number.isNaN(s) && !Number.isNaN(e) && e > s;
+  });
+
+  const byStage = new Map();
+  validRows.forEach((h) => {
+    if (!byStage.has(h.stage)) byStage.set(h.stage, []);
+    byStage.get(h.stage).push({ start: new Date(h.startedAt).getTime(), end: new Date(h.endedAt).getTime() });
+  });
+
+  const results = [];
+  byStage.forEach((intervals, stageLabel) => {
+    const stageDef = productionStages.find((s) => s.label === stageLabel);
+    const { avgConcurrent, peakConcurrent, activeHours } = concurrencyFromIntervals(intervals);
+    results.push({
+      key: stageDef?.key ?? stageLabel,
+      label: stageLabel,
+      avgConcurrent: Number(avgConcurrent.toFixed(2)),
+      peakConcurrent,
+      sessionsCounted: intervals.length,
+      activeHours: Number(activeHours.toFixed(1)),
+    });
+  });
+
+  return results.sort((a, b) => b.avgConcurrent - a.avgConcurrent);
+}
