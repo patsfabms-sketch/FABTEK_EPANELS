@@ -9,6 +9,7 @@ const NAV = [
   { to: "/panels", label: "Panels", icon: PanelsIcon },
   { to: "/reports", label: "Analytics", icon: ReportsIcon },
   { to: "/goals", label: "Goals", icon: GoalsIcon },
+  { to: "/capacity-report", label: "Capacity Report", icon: CapacityIcon },
   { to: "/team", label: "Team", icon: TeamIcon },
   { to: "/payroll", label: "Payroll", icon: PayrollIcon },
   { to: "/sessions", label: "Session Log", icon: SessionLogIcon },
@@ -124,6 +125,14 @@ function GoalsIcon(props) {
       <circle cx="12" cy="12" r="8" />
       <circle cx="12" cy="12" r="4" />
       <circle cx="12" cy="12" r="0.6" fill="currentColor" />
+    </svg>
+  );
+}
+function CapacityIcon(props) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M4 20V10M12 20V4M20 20v-7" strokeLinecap="round" />
+      <path d="M3 4.5 12 4M17 2.5l3 1.5-1.5 3" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

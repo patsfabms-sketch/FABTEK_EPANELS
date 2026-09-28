@@ -1160,6 +1160,148 @@ export function computePanelsPerDayAvg(panels, workHistory, { now = Date.now() }
   };
 }
 
+// Siemens' ask (Pat, Sept 28): prove the shop can ship this many panels a
+// day, Monday through Friday, on a sustained basis — they'll pay overtime
+// once that's demonstrated. Pat also asked directly whether working
+// Saturdays/Sundays (to get ahead) inflates, or actually helps, that
+// Monday-Friday number.
+export const CAPACITY_TARGET_PER_DAY = 8;
+
+const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+// Monday (local midnight) of the calendar week containing ts, as a dayKeyFor
+// string — built from local Y/M/D components (never by re-parsing a
+// "YYYY-MM-DD" string with `new Date(...)`, which JS reads as UTC midnight
+// and can silently roll back a day in a negative-UTC-offset timezone like
+// this shop's).
+function mondayKeyFor(ts) {
+  const d = new Date(ts);
+  const dow = d.getDay(); // 0 Sun .. 6 Sat
+  const diffToMonday = dow === 0 ? -6 : 1 - dow;
+  const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() + diffToMonday);
+  return dayKeyFor(monday.getTime());
+}
+
+// Answers "how many panels are we actually shipping per weekday" — the
+// specific, narrower question Siemens is asking, as distinct from
+// computePanelsPerDayAvg's single lifetime blended average above (which
+// pools every day, weekends included, since the app's first day). Two rules
+// make this trustworthy enough to hand to a customer:
+//
+// 1. Only a REAL, same-day-logged Wrap completion counts toward a given
+//    date. loggedByAdmin rows (AppContext.adminMarkPanelSent, the backlog
+//    "Mark as Sent" tool) are excluded entirely here, even though they still
+//    count as shipped everywhere else in the app (the Sent tab, the
+//    lifetime Avg Panels Shipped/Day tile, weekly P&L) — those rows are
+//    stamped with the day an admin clicked the button, not the panel's real
+//    (often weeks-old, unknown) ship date. Checked directly against the
+//    database before building this: a September 23-26 backlog-clearing pass
+//    logged 46 such corrections, and folding them in would have made
+//    several ordinary days look like exceptional single-day output that
+//    never actually happened on that date — exactly the kind of number that
+//    falls apart if a customer ever asks a follow-up question.
+// 2. A panel that ships on a Saturday or Sunday is bucketed under that
+//    Saturday/Sunday, never folded into the weekday total — so working
+//    weekends can never directly inflate the Monday-Friday figure. It can
+//    only help indirectly, by clearing prep/routing work ahead of time so a
+//    panel finishes (Wraps) sooner in the following week — something worth
+//    watching for in the week-by-week trend below as more weekends of data
+//    come in, not something this function claims to prove on its own.
+//
+// A calendar day only appears at all if the shop logged real (non-admin)
+// activity that day — a closed day (a holiday) has none and is correctly
+// left out of the average rather than counted as a 0-panel weekday, while a
+// day the shop was open but genuinely shipped nothing still counts as a
+// real zero. The current, still-in-progress calendar day is always tagged
+// `inProgress` and excluded from every average, so checking this mid-shift
+// never drags the numbers down with a partial day.
+export function computeWeekdayCapacityReport(panels, workHistory, { now = Date.now(), targetPerDay = CAPACITY_TARGET_PER_DAY } = {}) {
+  const todayKey = dayKeyFor(now);
+  const dayTimestamps = new Map(); // dateKey -> a real ms timestamp logged that day
+
+  workHistory.forEach((h) => {
+    if (h.loggedByAdmin || !h.createdAt) return;
+    const t = new Date(h.createdAt).getTime();
+    if (Number.isNaN(t)) return;
+    const key = dayKeyFor(t);
+    if (key && !dayTimestamps.has(key)) dayTimestamps.set(key, t);
+  });
+
+  const shipCounts = new Map(); // dateKey -> panels shipped that day
+  const perBuildShipTs = new Map(); // buildId -> earliest real (non-admin) ship ms
+  workHistory
+    .filter((h) => isShippedSessionRow(h) && !h.loggedByAdmin)
+    .forEach((h) => {
+      const t = new Date(h.endedAt || h.createdAt).getTime();
+      if (Number.isNaN(t)) return;
+      const existing = perBuildShipTs.get(h.buildId);
+      if (existing === undefined || t < existing) perBuildShipTs.set(h.buildId, t);
+    });
+  perBuildShipTs.forEach((t) => {
+    const key = dayKeyFor(t);
+    if (!key) return;
+    shipCounts.set(key, (shipCounts.get(key) ?? 0) + 1);
+    if (!dayTimestamps.has(key)) dayTimestamps.set(key, t);
+  });
+
+  const days = Array.from(dayTimestamps.entries())
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .map(([key, ts]) => {
+      const weekday = new Date(ts).getDay();
+      return {
+        date: key,
+        dow: DOW_LABELS[weekday],
+        weekday,
+        isWeekday: weekday >= 1 && weekday <= 5,
+        panelsShipped: shipCounts.get(key) ?? 0,
+        weekOf: mondayKeyFor(ts),
+        inProgress: key === todayKey,
+      };
+    });
+
+  const weekdayDays = days.filter((d) => d.isWeekday && !d.inProgress);
+  const weekendDays = days.filter((d) => !d.isWeekday && !d.inProgress);
+
+  const weekdayTotal = weekdayDays.reduce((s, d) => s + d.panelsShipped, 0);
+  const bestWeekday = weekdayDays.reduce((max, d) => Math.max(max, d.panelsShipped), 0);
+  const daysAtOrAboveTarget = weekdayDays.filter((d) => d.panelsShipped >= targetPerDay).length;
+
+  const weeklyMap = new Map();
+  weekdayDays.forEach((d) => {
+    if (!weeklyMap.has(d.weekOf)) weeklyMap.set(d.weekOf, []);
+    weeklyMap.get(d.weekOf).push(d);
+  });
+  const weeks = Array.from(weeklyMap.entries())
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .map(([weekOf, list]) => {
+      const total = list.reduce((s, d) => s + d.panelsShipped, 0);
+      return {
+        weekOf,
+        weekdaysLogged: list.length,
+        total,
+        avgPerDay: Number((total / list.length).toFixed(2)),
+      };
+    });
+
+  const excludedAdminCorrections = workHistory.filter((h) => h.loggedByAdmin && isShippedSessionRow(h)).length;
+
+  return {
+    targetPerDay,
+    days,
+    weekdayDays: weekdayDays.length,
+    weekdayTotal,
+    weekdayAvg: weekdayDays.length ? Number((weekdayTotal / weekdayDays.length).toFixed(2)) : null,
+    bestWeekday,
+    daysAtOrAboveTarget,
+    pctDaysAtTarget: weekdayDays.length ? Number(((daysAtOrAboveTarget / weekdayDays.length) * 100).toFixed(0)) : null,
+    weekendTotal: weekendDays.reduce((s, d) => s + d.panelsShipped, 0),
+    saturdayTotal: weekendDays.filter((d) => d.weekday === 6).reduce((s, d) => s + d.panelsShipped, 0),
+    sundayTotal: weekendDays.filter((d) => d.weekday === 0).reduce((s, d) => s + d.panelsShipped, 0),
+    weeks,
+    excludedAdminCorrections,
+  };
+}
+
 // Powers the "Estimate a New Panel" calculator on Reports.jsx: given which
 // stages a hypothetical panel's routing will actually go through and how
 // many connections it's expected to need, projects total build hours.
