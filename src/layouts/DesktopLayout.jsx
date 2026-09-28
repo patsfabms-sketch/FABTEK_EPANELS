@@ -8,11 +8,11 @@ const NAV = [
   { to: "/floor-status", label: "Floor Status", icon: FloorStatusIcon },
   { to: "/panels", label: "Panels", icon: PanelsIcon },
   { to: "/reports", label: "Analytics", icon: ReportsIcon },
-  { to: "/goals", label: "Goals", icon: GoalsIcon },
   { to: "/capacity-report", label: "Capacity Report", icon: CapacityIcon },
   { to: "/packout-issues", label: "Packout Issues", icon: PackoutIssuesIcon },
   { to: "/team", label: "Team", icon: TeamIcon },
   { to: "/payroll", label: "Payroll", icon: PayrollIcon },
+  { to: "/pnl", label: "P&L", icon: PnlIcon },
   { to: "/sessions", label: "Session Log", icon: SessionLogIcon },
   { to: "/leaderboard", label: "Leaderboard", icon: LeaderboardIcon },
   { to: "/estimates", label: "Estimates", icon: EstimatesIcon },
@@ -120,12 +120,11 @@ function ReportsIcon(props) {
     </svg>
   );
 }
-function GoalsIcon(props) {
+function PnlIcon(props) {
   return (
     <svg {...iconProps(props)}>
-      <circle cx="12" cy="12" r="8" />
-      <circle cx="12" cy="12" r="4" />
-      <circle cx="12" cy="12" r="0.6" fill="currentColor" />
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M9 14.5c0 1.1 1.1 2 2.5 2h1c1.4 0 2.5-.9 2.5-2s-1.1-1.8-2.5-2-2.5-.7-2.5-1.8 1.1-2 2.5-2h1c1.4 0 2.5.9 2.5 2M12 6.5v1M12 16.5v1" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

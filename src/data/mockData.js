@@ -1896,6 +1896,113 @@ export function computeWeeklyProfitAndLoss(panels, workHistory, clockLog, employ
   };
 }
 
+// One range's worth of P&L plus the real, already-tracked shop signals a
+// margin swing is usually chalked up to — OT hours, connections credited,
+// rework activity, packout issues reported, and flagged sessions. Used by
+// computeMarginDrivers below to build a same-week-vs-previous-week
+// comparison; kept as its own function since the ProfitAndLoss page's
+// multi-week trend table (computeProfitAndLossTrend) needs the same P&L
+// figures without the driver breakdown for every week shown.
+function pnlWithDrivers(panels, workHistory, clockLog, employees, start, end, { now = Date.now() } = {}) {
+  const pnl = computeWeeklyProfitAndLoss(panels, workHistory, clockLog, employees, start, end, { now });
+  const otHours = Number(
+    computePayrollSummary(clockLog, employees, start, end, { now })
+      .reduce((s, r) => s + r.overtimeHours, 0)
+      .toFixed(2)
+  );
+  const inRange = (h) => {
+    if (h.loggedByAdmin || !h.createdAt) return false;
+    const t = new Date(h.createdAt).getTime();
+    return !Number.isNaN(t) && t >= start && t < end;
+  };
+  const rangeRows = workHistory.filter(inRange);
+  const connectionsCredited = rangeRows.reduce((s, h) => s + (h.connectionsCredited || 0), 0);
+  const reworkRows = rangeRows.filter((h) => h.stage === REWORK_STAGE_LABEL);
+  const reworkSessions = reworkRows.length;
+  const reworkHours = Number(reworkRows.reduce((s, h) => s + (h.hours || 0), 0).toFixed(2));
+  const flaggedSessions = rangeRows.filter((h) => h.status === "Flagged").length;
+  const packoutIssuesReported = computePackoutIssues(panels, workHistory, employees, { now }).filter((issue) => {
+    const t = new Date(issue.reportedAt).getTime();
+    return !Number.isNaN(t) && t >= start && t < end;
+  }).length;
+
+  return {
+    revenue: pnl.revenue,
+    payrollCost: pnl.payrollCost,
+    profit: pnl.profit,
+    marginPct: pnl.marginPct,
+    shippedCount: pnl.shippedPanels.length,
+    shippedPanels: pnl.shippedPanels,
+    otHours,
+    connectionsCredited,
+    reworkSessions,
+    reworkHours,
+    flaggedSessions,
+    packoutIssuesReported,
+  };
+}
+
+// Powers the ProfitAndLoss page's "What's Changing Margin" section — Pat's
+// own words: "suggestions on what was driving that margin higher or lower.
+// like more ot this week than last week, or more connections made this
+// week or x amount of issues on the session or there was more rework." This
+// deliberately surfaces real, already-tracked deltas rather than inventing
+// a causal model — it says what changed between the two ranges (OT hours,
+// connections credited, rework, packout issues, flagged sessions), so Pat
+// can judge for herself what's actually behind a margin swing, the same
+// "always show where the number came from" discipline this whole app
+// already follows, rather than asserting a specific cause it can't prove.
+export function computeMarginDrivers(panels, workHistory, clockLog, employees, currentRange, previousRange, opts = {}) {
+  const current = pnlWithDrivers(panels, workHistory, clockLog, employees, currentRange.start, currentRange.end, opts);
+  const previous = pnlWithDrivers(panels, workHistory, clockLog, employees, previousRange.start, previousRange.end, opts);
+  const round2 = (n) => Number(n.toFixed(2));
+  const delta = (key) => round2(current[key] - previous[key]);
+  return {
+    current,
+    previous,
+    deltas: {
+      revenue: delta("revenue"),
+      payrollCost: delta("payrollCost"),
+      profit: delta("profit"),
+      marginPct: current.marginPct !== null && previous.marginPct !== null ? current.marginPct - previous.marginPct : null,
+      shippedCount: current.shippedCount - previous.shippedCount,
+      otHours: delta("otHours"),
+      connectionsCredited: current.connectionsCredited - previous.connectionsCredited,
+      reworkSessions: current.reworkSessions - previous.reworkSessions,
+      reworkHours: delta("reworkHours"),
+      flaggedSessions: current.flaggedSessions - previous.flaggedSessions,
+      packoutIssuesReported: current.packoutIssuesReported - previous.packoutIssuesReported,
+    },
+  };
+}
+
+// Multi-week P&L trend for the ProfitAndLoss page — Pat asked to "do
+// comparisons" beyond just this-week-vs-last, so this returns the last
+// `weeks` payroll weeks (most recent first, current in-progress week
+// included and tagged `inProgress`) with the same revenue/cost/profit/
+// margin/shipped figures computeWeeklyProfitAndLoss already computes for
+// one week, so the page can list them side by side.
+export function computeProfitAndLossTrend(panels, workHistory, clockLog, employees, { weeks = 8, now = Date.now() } = {}) {
+  const currentWeekStart = payrollWeekStart(new Date(now));
+  const out = [];
+  for (let i = 0; i < weeks; i++) {
+    const start = new Date(currentWeekStart);
+    start.setDate(start.getDate() - 7 * i);
+    const { start: rangeStart, end: rangeEnd } = payrollWeekRange(start);
+    const pnl = computeWeeklyProfitAndLoss(panels, workHistory, clockLog, employees, rangeStart, rangeEnd, { now });
+    out.push({
+      weekOf: payrollWeekKey(start),
+      inProgress: i === 0,
+      revenue: pnl.revenue,
+      payrollCost: pnl.payrollCost,
+      profit: pnl.profit,
+      marginPct: pnl.marginPct,
+      shippedCount: pnl.shippedPanels.length,
+    });
+  }
+  return out;
+}
+
 // Attributes overtime PREMIUM cost (the extra OVERTIME_MULTIPLIER-1 on top
 // of what those hours would have cost at straight time — the actual added
 // cost overtime causes, which is the number that matters for "should this

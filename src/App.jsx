@@ -5,9 +5,9 @@ import MobileLayout from "./layouts/MobileLayout";
 import Dashboard from "./pages/desktop/Dashboard";
 import FloorStatus from "./pages/desktop/FloorStatus";
 import Reports from "./pages/desktop/Reports";
-import Goals from "./pages/desktop/Goals";
 import Team from "./pages/desktop/Team";
 import Payroll from "./pages/desktop/Payroll";
+import ProfitAndLoss from "./pages/desktop/ProfitAndLoss";
 import CapacityReport from "./pages/desktop/CapacityReport";
 import PackoutIssues from "./pages/desktop/PackoutIssues";
 import Estimates from "./pages/desktop/Estimates";
@@ -32,10 +32,10 @@ export default function App() {
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/floor-status" element={<FloorStatus />} />
             <Route path="/reports" element={<Reports />} />
-            <Route path="/goals" element={<Goals />} />
             <Route path="/team" element={<Team />} />
             <Route path="/team/:id" element={<EmployeeDetail />} />
             <Route path="/payroll" element={<Payroll />} />
+            <Route path="/pnl" element={<ProfitAndLoss />} />
             <Route path="/capacity-report" element={<CapacityReport />} />
             <Route path="/packout-issues" element={<PackoutIssues />} />
             <Route path="/sessions" element={<SessionLog />} />
