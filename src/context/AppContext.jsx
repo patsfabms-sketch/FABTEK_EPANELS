@@ -7,6 +7,7 @@ import {
   generateUsername,
   CONNECT_STAGE_LABEL,
   REWORK_STAGE_LABEL,
+  VERIFY_STAGE_LABEL,
   effectiveElapsedMs,
   parseClockQrValue,
   isValidClockWeek,
@@ -170,6 +171,9 @@ function toDbWorkHistory(h) {
     rework_root_cause: h.reworkRootCause ?? null,
     rework_attributed_to_id: h.reworkAttributedToId ?? null,
     logged_by_admin: !!h.loggedByAdmin,
+    notes: h.notes ?? null,
+    packout_missing_parts: h.packoutMissingParts ?? null,
+    packout_missing_description: h.packoutMissingDescription ?? null,
   };
 }
 // Partial-update mapper for correcting an existing row — see
@@ -194,6 +198,9 @@ const WORKHISTORY_FIELD_MAP = {
   reworkRootCause: "rework_root_cause",
   reworkAttributedToId: "rework_attributed_to_id",
   loggedByAdmin: "logged_by_admin",
+  notes: "notes",
+  packoutMissingParts: "packout_missing_parts",
+  packoutMissingDescription: "packout_missing_description",
 };
 function toDbWorkHistoryFields(fields) {
   const out = {};
@@ -242,6 +249,18 @@ function fromDbWorkHistory(row) {
     // shipped before Wrap-scanning discipline existed, not a real
     // technician session. See adminMarkPanelSent below.
     loggedByAdmin: !!row.logged_by_admin,
+    // Free-text note a technician optionally typed on the Stop Session
+    // screen (session.notes) — added late; every session logged before this
+    // field existed has null here, not because nothing was typed, but
+    // because nothing was ever saved (see the Update 35 doc note on
+    // stopSession below).
+    notes: row.notes ?? null,
+    // Populated only for Verifying Packout-stage entries — whether the
+    // technician reported anything missing from the kit at check-in, and
+    // what, if so. Null on every other stage, and on any Verify entry logged
+    // before this requirement existed. See computePackoutIssues.
+    packoutMissingParts: row.packout_missing_parts,
+    packoutMissingDescription: row.packout_missing_description ?? null,
   };
 }
 
@@ -1376,8 +1395,15 @@ export function AppProvider({ children }) {
   // clamps before calling this.
   function stopSession(percentAdded, opts = {}) {
     if (!session.active) return;
-    const { reworkReason = null, reworkRootCause = null, reworkAttributedToId = null } = opts;
+    const {
+      reworkReason = null,
+      reworkRootCause = null,
+      reworkAttributedToId = null,
+      packoutMissingParts = null,
+      packoutMissingDescription = null,
+    } = opts;
     const isReworkStage = session.stage === REWORK_STAGE_LABEL;
+    const isVerifyStage = session.stage === VERIFY_STAGE_LABEL;
     // Paid break windows (9:15–9:30, 11:00–11:30, 3:15–3:30 every day) are
     // never counted as logged work — effectiveElapsedMs subtracts whatever
     // portion of this session's wall-clock span fell inside one, regardless
@@ -1425,6 +1451,13 @@ export function AppProvider({ children }) {
       reworkReason: isReworkStage ? reworkReason : null,
       reworkRootCause: isReworkStage ? reworkRootCause : null,
       reworkAttributedToId: isReworkStage ? reworkAttributedToId : null,
+      // Free-text note, any stage — optional, never gates Confirm.
+      notes: session.notes?.trim() ? session.notes.trim() : null,
+      // Only meaningful on a Verifying Packout session (see ActiveSession.jsx's
+      // Stop Session flow, which requires this to be answered before a Verify
+      // session can be stopped) — null on every other stage.
+      packoutMissingParts: isVerifyStage ? packoutMissingParts : null,
+      packoutMissingDescription: isVerifyStage && packoutMissingParts ? packoutMissingDescription : null,
     };
     setWorkHistory((prev) => [entry, ...prev]);
     supabase.from("assemblyos_work_history").insert(toDbWorkHistory(entry)).then(reportResult);
@@ -1436,7 +1469,8 @@ export function AppProvider({ children }) {
         (connectionsCredited > 0 ? ` · +${connectionsCredited} connections` : "") +
         (rateFlagged
           ? ` · flagged for review — ${rate} conn/hr exceeds the ${CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD}/hr threshold`
-          : ""),
+          : "") +
+        (isVerifyStage && packoutMissingParts ? ` · missing parts reported — ${packoutMissingDescription}` : ""),
       `Panel ${session.panel}`,
       { who: currentUser?.name ?? "Technician", kind: isComplete ? "verify" : "scan" }
     );

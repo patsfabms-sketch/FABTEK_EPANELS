@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
 import { Button, formatNumber } from "../../components/ui";
-import { unitLabel, effectiveElapsedMs, REWORK_STAGE_LABEL } from "../../data/mockData";
+import { unitLabel, effectiveElapsedMs, REWORK_STAGE_LABEL, VERIFY_STAGE_LABEL } from "../../data/mockData";
 
 // Rework's "Attributed to" picker used to offer an "Unknown / not one
 // person's error" option here. Pat's request: it should always name a real
@@ -31,6 +31,17 @@ export default function ActiveSession() {
   const [reworkReason, setReworkReason] = useState("");
   const [reworkRootCause, setReworkRootCause] = useState("");
   const [reworkAttributedTo, setReworkAttributedTo] = useState(""); // "" = not yet chosen
+
+  // Only asked for — and only required — when this session's stage is
+  // Verifying Packout. Pat's request: capture, as real structured data,
+  // whenever something required is missing from a kit, so a pattern of
+  // customer-supplied kits arriving short can be shown as evidence rather
+  // than recalled from memory. The free-text Notes field below already
+  // existed for this, but was never actually saved (see stopSession) — this
+  // is the real, structured replacement for that specific use.
+  const isVerify = session.stage === VERIFY_STAGE_LABEL;
+  const [packoutMissingParts, setPackoutMissingParts] = useState(null); // null = not yet answered
+  const [packoutMissingDescription, setPackoutMissingDescription] = useState("");
 
   // Shows the same break-adjusted time that will actually get logged when
   // this session stops (see effectiveElapsedMs) — so a technician working
@@ -71,6 +82,8 @@ export default function ActiveSession() {
     setReworkReason("");
     setReworkRootCause("");
     setReworkAttributedTo("");
+    setPackoutMissingParts(null);
+    setPackoutMissingDescription("");
     setShowStopModal(true);
   }
 
@@ -79,13 +92,23 @@ export default function ActiveSession() {
   // buttons already use, just with more to fill in before this unlocks.
   const reworkFieldsComplete =
     !isRework || (reworkReason.trim() !== "" && reworkRootCause.trim() !== "" && reworkAttributedTo !== "");
-  const canConfirm = percentAdded !== null && reworkFieldsComplete;
+  // Verifying Packout must always get a real Yes/No answer before Confirm
+  // unlocks — "not answered" isn't allowed to silently read as "nothing
+  // missing." Once "something's missing" is picked, a description is
+  // required too, same reasoning as Rework's fields above.
+  const verifyFieldsComplete =
+    !isVerify ||
+    packoutMissingParts === false ||
+    (packoutMissingParts === true && packoutMissingDescription.trim() !== "");
+  const canConfirm = percentAdded !== null && reworkFieldsComplete && verifyFieldsComplete;
 
   function confirmStop() {
     stopSession(percentAdded ?? 0, {
       reworkReason: isRework ? reworkReason.trim() : null,
       reworkRootCause: isRework ? reworkRootCause.trim() : null,
       reworkAttributedToId: isRework ? reworkAttributedTo : null,
+      packoutMissingParts: isVerify ? packoutMissingParts : null,
+      packoutMissingDescription: isVerify && packoutMissingParts ? packoutMissingDescription.trim() : null,
     });
     navigate("/mobile");
   }
@@ -260,6 +283,52 @@ export default function ActiveSession() {
                     </option>
                   ))}
                 </select>
+              </div>
+            )}
+
+            {isVerify && (
+              <div className="border-t border-paper-100 pt-4 mt-1 mb-4">
+                <p className="text-sm font-semibold text-ink-900 mb-1">Packout verification</p>
+                <p className="text-[11px] text-ink-500 mb-3">
+                  Required before this session can be logged out — this is what shows up on the Packout Issues
+                  report if something's missing.
+                </p>
+
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                  <button
+                    onClick={() => setPackoutMissingParts(false)}
+                    className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${
+                      packoutMissingParts === false
+                        ? "border-good-500 bg-good-50 text-good-700"
+                        : "border-paper-200 text-ink-900 hover:border-good-400"
+                    }`}
+                  >
+                    ✓ Everything was there
+                  </button>
+                  <button
+                    onClick={() => setPackoutMissingParts(true)}
+                    className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${
+                      packoutMissingParts === true
+                        ? "border-bad-500 bg-bad-50 text-bad-700"
+                        : "border-paper-200 text-ink-900 hover:border-bad-400"
+                    }`}
+                  >
+                    Something's missing
+                  </button>
+                </div>
+
+                {packoutMissingParts === true && (
+                  <>
+                    <label className="text-xs font-semibold text-ink-500">What's missing?</label>
+                    <textarea
+                      value={packoutMissingDescription}
+                      onChange={(e) => setPackoutMissingDescription(e.target.value)}
+                      rows={2}
+                      placeholder="e.g. missing 4 terminal blocks, PN 1492-L4"
+                      className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm resize-none"
+                    />
+                  </>
+                )}
               </div>
             )}
 

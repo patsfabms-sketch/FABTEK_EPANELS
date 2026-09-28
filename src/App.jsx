@@ -9,6 +9,7 @@ import Goals from "./pages/desktop/Goals";
 import Team from "./pages/desktop/Team";
 import Payroll from "./pages/desktop/Payroll";
 import CapacityReport from "./pages/desktop/CapacityReport";
+import PackoutIssues from "./pages/desktop/PackoutIssues";
 import Estimates from "./pages/desktop/Estimates";
 import EmployeeDetail from "./pages/desktop/EmployeeDetail";
 import SessionLog from "./pages/desktop/SessionLog";
@@ -36,6 +37,7 @@ export default function App() {
             <Route path="/team/:id" element={<EmployeeDetail />} />
             <Route path="/payroll" element={<Payroll />} />
             <Route path="/capacity-report" element={<CapacityReport />} />
+            <Route path="/packout-issues" element={<PackoutIssues />} />
             <Route path="/sessions" element={<SessionLog />} />
             <Route path="/leaderboard" element={<Leaderboard />} />
             <Route path="/estimates" element={<Estimates />} />

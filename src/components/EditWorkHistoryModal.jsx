@@ -4,6 +4,7 @@ import {
   productionStages,
   CONNECT_STAGE_LABEL,
   REWORK_STAGE_LABEL,
+  VERIFY_STAGE_LABEL,
   taskProgress,
   connectionsPerHour,
   CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD,
@@ -59,6 +60,15 @@ export default function EditWorkHistoryModal({ entry, employeeName, onClose }) {
   const [reworkAttributedTo, setReworkAttributedTo] = useState(
     entry.reworkAttributedToId ?? (entry.stage === REWORK_STAGE_LABEL ? UNKNOWN_ATTRIBUTION : "")
   );
+  // "" = not recorded, "yes"/"no" = the technician's real answer. Kept as a
+  // tri-state string (not a plain boolean) so an admin can tell "answered
+  // no" apart from "this entry predates the requirement and was never
+  // asked" — same reasoning as Rework's Unknown-attribution sentinel above.
+  const [packoutMissingParts, setPackoutMissingParts] = useState(
+    entry.packoutMissingParts === true ? "yes" : entry.packoutMissingParts === false ? "no" : ""
+  );
+  const [packoutMissingDescription, setPackoutMissingDescription] = useState(entry.packoutMissingDescription || "");
+  const [notes, setNotes] = useState(entry.notes || "");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   // Rework's three fields only show/apply when the entry's (possibly just-
@@ -66,6 +76,8 @@ export default function EditWorkHistoryModal({ entry, employeeName, onClose }) {
   // so an entry corrected INTO Rework here starts asking for them too, and
   // one corrected OUT of Rework stops carrying stale rework details forward.
   const isRework = stage === REWORK_STAGE_LABEL;
+  // Same pattern for Verifying Packout's missing-parts fields.
+  const isVerify = stage === VERIFY_STAGE_LABEL;
 
   // The stage dropdown is built from the current list of production stages —
   // but if this entry's stage is an older/renamed one that's no longer in
@@ -114,6 +126,9 @@ export default function EditWorkHistoryModal({ entry, employeeName, onClose }) {
       reworkReason: isRework ? reworkReason.trim() || null : null,
       reworkRootCause: isRework ? reworkRootCause.trim() || null : null,
       reworkAttributedToId: isRework && reworkAttributedTo && reworkAttributedTo !== UNKNOWN_ATTRIBUTION ? reworkAttributedTo : null,
+      packoutMissingParts: isVerify && packoutMissingParts ? packoutMissingParts === "yes" : null,
+      packoutMissingDescription: isVerify && packoutMissingParts === "yes" ? packoutMissingDescription.trim() || null : null,
+      notes: notes.trim() || null,
     });
     onClose();
   }
@@ -239,6 +254,62 @@ export default function EditWorkHistoryModal({ entry, employeeName, onClose }) {
         </div>
       )}
 
+      {isVerify && (
+        <div className="rounded-lg bg-paper-50 border border-paper-200 px-3 py-3 mb-3">
+          <p className="text-[11px] font-semibold text-ink-700 mb-2">Packout verification</p>
+
+          <label className="text-xs font-semibold text-ink-500">Anything missing?</label>
+          <div className="mt-1 mb-2 flex gap-2">
+            <button
+              type="button"
+              onClick={() => setPackoutMissingParts("no")}
+              className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-semibold ${
+                packoutMissingParts === "no"
+                  ? "border-good-500 bg-good-50 text-good-600"
+                  : "border-paper-200 text-ink-600 hover:border-good-300"
+              }`}
+            >
+              No — all there
+            </button>
+            <button
+              type="button"
+              onClick={() => setPackoutMissingParts("yes")}
+              className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-semibold ${
+                packoutMissingParts === "yes"
+                  ? "border-bad-500 bg-bad-50 text-bad-600"
+                  : "border-paper-200 text-ink-600 hover:border-bad-300"
+              }`}
+            >
+              Yes — missing
+            </button>
+            <button
+              type="button"
+              onClick={() => setPackoutMissingParts("")}
+              className={`rounded-lg border px-3 py-2 text-[12px] font-semibold ${
+                packoutMissingParts === ""
+                  ? "border-ink-400 bg-paper-100 text-ink-600"
+                  : "border-paper-200 text-ink-400 hover:border-ink-300"
+              }`}
+            >
+              Not recorded
+            </button>
+          </div>
+
+          {packoutMissingParts === "yes" && (
+            <>
+              <label className="text-xs font-semibold text-ink-500">What's missing</label>
+              <textarea
+                value={packoutMissingDescription}
+                onChange={(e) => setPackoutMissingDescription(e.target.value)}
+                rows={2}
+                placeholder="Not recorded"
+                className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm resize-none bg-white"
+              />
+            </>
+          )}
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div>
           <label className="text-xs font-semibold text-ink-500">Hours</label>
@@ -300,6 +371,15 @@ export default function EditWorkHistoryModal({ entry, employeeName, onClose }) {
         <input type="checkbox" checked={taskCompleted} onChange={(e) => setTaskCompleted(e.target.checked)} />
         <span className="text-xs font-semibold text-ink-700">Task marked complete</span>
       </label>
+
+      <label className="text-xs font-semibold text-ink-500">Notes</label>
+      <textarea
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        rows={2}
+        placeholder="Not recorded"
+        className="mt-1 mb-3 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm resize-none"
+      />
 
       <label className="text-xs font-semibold text-ink-500">Status</label>
       <div className="mt-1 mb-5 flex gap-2">

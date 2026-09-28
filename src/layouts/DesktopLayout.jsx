@@ -10,6 +10,7 @@ const NAV = [
   { to: "/reports", label: "Analytics", icon: ReportsIcon },
   { to: "/goals", label: "Goals", icon: GoalsIcon },
   { to: "/capacity-report", label: "Capacity Report", icon: CapacityIcon },
+  { to: "/packout-issues", label: "Packout Issues", icon: PackoutIssuesIcon },
   { to: "/team", label: "Team", icon: TeamIcon },
   { to: "/payroll", label: "Payroll", icon: PayrollIcon },
   { to: "/sessions", label: "Session Log", icon: SessionLogIcon },
@@ -133,6 +134,15 @@ function CapacityIcon(props) {
     <svg {...iconProps(props)}>
       <path d="M4 20V10M12 20V4M20 20v-7" strokeLinecap="round" />
       <path d="M3 4.5 12 4M17 2.5l3 1.5-1.5 3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+function PackoutIssuesIcon(props) {
+  return (
+    <svg {...iconProps(props)}>
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+      <path d="M8 8.5h5M8 12h8M8 15.5h5" strokeLinecap="round" />
+      <path d="M15.5 15.5 17.3 17.3M17.3 14.2a2.1 2.1 0 1 1-4.2 0 2.1 2.1 0 0 1 4.2 0Z" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

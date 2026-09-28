@@ -829,6 +829,69 @@ export function computeMissingWrapPanels(panels, workHistory) {
 export const REWORK_STAGE_KEY = "rework";
 export const REWORK_STAGE_LABEL = productionStages.find((s) => s.key === REWORK_STAGE_KEY)?.label;
 
+// Key of the "Verifying Packout" stage — where a Lead Panel Technician
+// checks an incoming kit against its parts list before the build starts.
+// Pat's request: when something required is missing, capture that as real
+// structured data (not just a note that, until this update, was never
+// actually saved anywhere — see the Stop Session "Notes" field and
+// computePackoutIssues below) so a pattern of customer-supplied kits
+// arriving short can be shown as real evidence, not recalled from memory.
+export const VERIFY_STAGE_KEY = "verify";
+export const VERIFY_STAGE_LABEL = productionStages.find((s) => s.key === VERIFY_STAGE_KEY)?.label;
+
+// Every Verifying Packout session where the technician reported something
+// was missing (packoutMissingParts === true) — one row per report, not
+// deduplicated per panel, since Pat wants to see "all the issues," including
+// a panel flagged more than once for different missing items.
+//
+// An issue counts as resolved once a LATER Verifying Packout session on the
+// same build either reports packoutMissingParts === false (checked again,
+// nothing missing that time) or taskCompleted === true (verification was
+// finished) — whichever comes first chronologically after the report. If no
+// such later session exists yet, the issue is still open and daysOpen is
+// measured against `now`.
+export function computePackoutIssues(panels, workHistory, employees, { now = Date.now() } = {}) {
+  const employeeById = new Map(employees.map((e) => [e.id, e]));
+  const panelByBuildId = new Map(panels.map((p) => [p.buildId, p]));
+
+  const verifyRows = workHistory
+    .filter((h) => h.stage === VERIFY_STAGE_LABEL && h.createdAt)
+    .map((h) => ({ ...h, _t: new Date(h.createdAt).getTime() }))
+    .filter((h) => !Number.isNaN(h._t))
+    .sort((a, b) => a._t - b._t);
+
+  const issues = [];
+  verifyRows.forEach((h) => {
+    if (h.packoutMissingParts !== true) return;
+    const resolution = verifyRows.find(
+      (later) =>
+        later.buildId === h.buildId &&
+        later._t > h._t &&
+        (later.taskCompleted || later.packoutMissingParts === false)
+    );
+    const panel = panelByBuildId.get(h.buildId);
+    const reportedBy = employeeById.get(h.employeeId);
+    const endTime = resolution ? resolution._t : now;
+    issues.push({
+      id: h.id,
+      buildId: h.buildId,
+      panelTag: h.panel,
+      panelId: panel?.id ?? (h.panel || "").replace(/^#/, ""),
+      jobNumber: panel?.jobNumber ?? "",
+      customer: panel?.customer ?? "",
+      missingDescription: h.packoutMissingDescription || "",
+      reportedById: h.employeeId,
+      reportedByName: reportedBy?.name ?? "Unknown",
+      reportedAt: h.createdAt,
+      resolved: !!resolution,
+      resolvedAt: resolution ? resolution.createdAt : null,
+      daysOpen: Number(Math.max(0, (endTime - h._t) / 86400000).toFixed(1)),
+    });
+  });
+
+  return issues.sort((a, b) => new Date(b.reportedAt).getTime() - new Date(a.reportedAt).getTime());
+}
+
 function stageStatsFromRows(rows, stage) {
   const stageRows = rows.filter((h) => h.stage === stage.label);
   if (stageRows.length === 0) return null;
