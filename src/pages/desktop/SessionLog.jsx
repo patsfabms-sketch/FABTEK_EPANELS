@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
-import { Card, SectionTitle, StatCard, Button, formatTimeRange } from "../../components/ui";
+import { REWORK_STAGE_LABEL } from "../../data/mockData";
+import { Card, SectionTitle, StatCard, Button, Tabs, formatTimeRange } from "../../components/ui";
 import EditWorkHistoryModal from "../../components/EditWorkHistoryModal";
 
 // A single logged session over this many hours gets a visual flag as
@@ -44,6 +45,7 @@ export default function SessionLog() {
   const [range, setRange] = useState(RANGE_OPTIONS[1]);
   const [sort, setSort] = useState("recent");
   const [editingEntry, setEditingEntry] = useState(null);
+  const [activeTab, setActiveTab] = useState("all");
 
   // "Now" as component state (rather than calling Date.now() directly in
   // the render body) — same pattern used in Reports.jsx/AdminHome.jsx.
@@ -101,6 +103,15 @@ export default function SessionLog() {
   const flaggedCount = useMemo(() => filtered.filter((h) => h.status === "Flagged").length, [filtered]);
   const longCount = useMemo(() => filtered.filter((h) => (h.hours || 0) >= LONG_SESSION_HOURS).length, [filtered]);
   const totalHours = useMemo(() => Number(filtered.reduce((s, h) => s + (h.hours || 0), 0).toFixed(1)), [filtered]);
+
+  // "A place where all the rework sessions live and can be reviewed" — the
+  // generic stage filter already let someone narrow to Rework, but it never
+  // surfaced the reason/root-cause/attribution fields Update 18 made
+  // mandatory (the whole point of collecting them was to give a manager
+  // something to actually review, and a shop-wide place to review it from).
+  // Reuses the same filtered/sorted set as the main table, so whatever
+  // search/employee/status/range is set applies to this tab too.
+  const reworkRows = useMemo(() => sorted.filter((h) => h.stage === REWORK_STAGE_LABEL), [sorted]);
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto">
@@ -192,6 +203,17 @@ export default function SessionLog() {
         )}
       </div>
 
+      <Tabs
+        tabs={[
+          { key: "all", label: "All Sessions" },
+          { key: "rework", label: "Rework", badge: reworkRows.length },
+        ]}
+        active={activeTab}
+        onChange={setActiveTab}
+      />
+
+      {activeTab === "all" && (
+        <>
       <SectionTitle
         title="Logged Sessions"
         subtitle={`${sorted.length} session${sorted.length === 1 ? "" : "s"} · sessions of ${LONG_SESSION_HOURS}+ hours are highlighted as a possible overrun`}
@@ -282,6 +304,101 @@ export default function SessionLog() {
           </table>
         )}
       </Card>
+        </>
+      )}
+
+      {activeTab === "rework" && (
+        <>
+          <SectionTitle
+            title="Rework Sessions"
+            subtitle={`${reworkRows.length} rework session${reworkRows.length === 1 ? "" : "s"} · reason, root cause, and who to ask are required for every one logged since Update 18`}
+          />
+          <Card padded={false} className="overflow-x-auto">
+            {reworkRows.length === 0 ? (
+              <p className="text-xs text-ink-400 text-center py-8">No rework sessions match these filters.</p>
+            ) : (
+              <table className="w-full text-[13px]">
+                <thead>
+                  <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
+                    <th className="px-4 py-3 font-semibold">Date</th>
+                    <th className="px-4 py-3 font-semibold">Panel</th>
+                    <th className="px-4 py-3 font-semibold">Logged By</th>
+                    <th className="px-4 py-3 font-semibold">Hours</th>
+                    <th className="px-4 py-3 font-semibold">Reason</th>
+                    <th className="px-4 py-3 font-semibold">Root Cause</th>
+                    <th className="px-4 py-3 font-semibold">Attributed To</th>
+                    <th className="px-4 py-3 font-semibold">Status</th>
+                    <th className="px-4 py-3 font-semibold"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reworkRows.map((h, i) => {
+                    const loggedBy = employeeById.get(h.employeeId);
+                    const attributedTo = h.reworkAttributedToId ? employeeById.get(h.reworkAttributedToId) : null;
+                    return (
+                      <tr key={h.id} className={`border-b border-paper-100 last:border-0 align-top ${i % 2 === 1 ? "bg-paper-50/60" : ""}`}>
+                        <td className="px-4 py-2.5 text-ink-600 whitespace-nowrap">{h.date}</td>
+                        <td className="px-4 py-2.5 text-ink-600 whitespace-nowrap">
+                          {h.panel}
+                          {jobNumberByBuildId.get(h.buildId) && (
+                            <span className="text-ink-400"> · Job #{jobNumberByBuildId.get(h.buildId)}</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 text-ink-900 font-medium whitespace-nowrap">
+                          {loggedBy ? (
+                            <Link to={`/team/${loggedBy.id}`} className="hover:text-brand-600">
+                              {loggedBy.name}
+                            </Link>
+                          ) : (
+                            <span className="text-ink-400">Unknown</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 text-ink-700 font-medium whitespace-nowrap">{h.hours}</td>
+                        <td className="px-4 py-2.5 text-ink-700 max-w-[220px]">{h.reworkReason || <span className="text-ink-400">Not recorded</span>}</td>
+                        <td className="px-4 py-2.5 text-ink-700 max-w-[220px]">{h.reworkRootCause || <span className="text-ink-400">Not recorded</span>}</td>
+                        <td className="px-4 py-2.5 text-ink-700 whitespace-nowrap">
+                          {attributedTo ? (
+                            <Link to={`/team/${attributedTo.id}`} className="font-medium hover:text-brand-600">
+                              {attributedTo.name}
+                            </Link>
+                          ) : h.reworkAttributedToId === null && h.reworkReason ? (
+                            <span className="text-ink-500">Unknown / not one person's error</span>
+                          ) : (
+                            <span className="text-ink-400">Not recorded</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 whitespace-nowrap">
+                          <span
+                            className={`text-[10px] font-semibold rounded-full px-2 py-0.5 ${
+                              h.status === "Verified" ? "bg-good-50 text-good-600" : "bg-bad-50 text-bad-600"
+                            }`}
+                          >
+                            {h.status}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                          <button
+                            onClick={() => setEditingEntry(h)}
+                            className="text-[11px] font-semibold text-brand-600 hover:text-brand-700"
+                          >
+                            Review
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </Card>
+          <p className="text-[11px] text-ink-400 mt-3">
+            Every rework session logged since Update 18 requires a reason, a root cause, and who to ask about it (or
+            an explicit "not one person's error" answer) before a technician can stop the session — this tab is just
+            those same sessions gathered in one place, using the same search/employee/status/range filters as the
+            main Session Log. A blank Reason/Root Cause/Attributed To means the entry predates that requirement.
+          </p>
+        </>
+      )}
 
       {editingEntry && (
         <EditWorkHistoryModal
