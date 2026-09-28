@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useApp } from "../../context/AppContext";
-import { computeWeekdayCapacityReport, CAPACITY_TARGET_PER_DAY } from "../../data/mockData";
+import { computeWeekdayCapacityReport, computeCapacityByHoursMix, CAPACITY_TARGET_PER_DAY } from "../../data/mockData";
 import { Card, SectionTitle, StatCard, Button, formatDate } from "../../components/ui";
 
 // Capacity Report — built to answer one concrete question from ownership:
@@ -26,9 +26,13 @@ import { Card, SectionTitle, StatCard, Button, formatDate } from "../../componen
 // throughout, same convention as the rest of the app) so it can be handed to
 // Siemens as-is.
 export default function CapacityReport() {
-  const { panels, workHistory } = useApp();
+  const { panels, workHistory, clockLog, employees } = useApp();
 
   const report = useMemo(() => computeWeekdayCapacityReport(panels, workHistory), [panels, workHistory]);
+  const hoursMix = useMemo(
+    () => computeCapacityByHoursMix(panels, workHistory, clockLog, employees),
+    [panels, workHistory, clockLog, employees]
+  );
 
   const atTarget = report.weekdayAvg !== null && report.weekdayAvg >= report.targetPerDay;
 
@@ -80,6 +84,71 @@ export default function CapacityReport() {
           sub={`Sat ${report.saturdayTotal} · Sun ${report.sundayTotal} — not counted toward the average above`}
         />
       </div>
+
+      <SectionTitle
+        title="Output vs. Overtime"
+        subtitle="Same crew — how much of our output comes from a straight 40-hr week vs. what overtime adds on top"
+      />
+      <div className="flex flex-wrap gap-4 mb-3">
+        <StatCard
+          label="Avg Panels/Day at 40 Hrs"
+          value={hoursMix.avgPanelsPerDayAt40 !== null ? hoursMix.avgPanelsPerDayAt40 : "—"}
+          sub="if the crew only worked their regular 40 hrs/week"
+        />
+        <StatCard
+          label="Avg Panels/Day with OT"
+          value={hoursMix.avgPanelsPerDayWithOt !== null ? hoursMix.avgPanelsPerDayWithOt : "—"}
+          sub="actual output including overtime hours worked"
+          accent="text-good-600"
+        />
+        <StatCard
+          label="What OT Is Adding"
+          value={hoursMix.otContributionPerDay !== null ? `+${hoursMix.otContributionPerDay}/day` : "—"}
+          sub={`from ${hoursMix.totalOvertimeHours} total OT hrs across ${hoursMix.weeksIncluded} complete week${hoursMix.weeksIncluded === 1 ? "" : "s"}`}
+        />
+      </div>
+      <Card padded={false} className="overflow-x-auto mb-3">
+        {hoursMix.weeks.length === 0 ? (
+          <p className="text-xs text-ink-400 text-center py-8">No complete payroll week with clocked hours yet.</p>
+        ) : (
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
+                <th className="px-4 py-3 font-semibold">Payroll Week Of</th>
+                <th className="px-4 py-3 font-semibold">Shipped</th>
+                <th className="px-4 py-3 font-semibold">Regular Hrs</th>
+                <th className="px-4 py-3 font-semibold">OT Hrs</th>
+                <th className="px-4 py-3 font-semibold">Panels at 40 Hrs</th>
+                <th className="px-4 py-3 font-semibold">Panels from OT</th>
+              </tr>
+            </thead>
+            <tbody>
+              {hoursMix.weeks.map((w, i) => (
+                <tr key={w.weekOf} className={`border-b border-paper-100 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""} ${w.inProgress ? "opacity-60" : ""}`}>
+                  <td className="px-4 py-2.5 font-medium text-ink-900">
+                    {formatDate(w.weekOf)}
+                    {w.inProgress && <span className="ml-2 text-[10px] text-ink-400 uppercase tracking-wide">In progress</span>}
+                  </td>
+                  <td className="px-4 py-2.5 text-ink-700">{w.shipped}</td>
+                  <td className="px-4 py-2.5 text-ink-700">{w.regularHours}</td>
+                  <td className="px-4 py-2.5 text-ink-700">{w.overtimeHours}</td>
+                  <td className="px-4 py-2.5 text-ink-700">{w.regularAttributedPanels}</td>
+                  <td className="px-4 py-2.5 text-ink-700">{w.overtimeAttributedPanels}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+      <p className="text-[11px] text-ink-400 mt-3 mb-8">
+        There's no way to know which specific clocked hour built which specific panel, so each week's real shipped
+        count is split across that week's regular vs. overtime hours in direct proportion to how many of each were
+        worked — the same kind of approximation this app already uses for Overtime Cost by Panel on Analytics. This
+        isn't a claim that an overtime hour is exactly as productive as a regular one, just the simplest honest way to
+        turn "X panels on Y total hours, Z of them overtime" into an apples-to-apples 40-hrs-vs-with-OT comparison
+        using the same week's real data, rather than comparing different weeks that happened to have or lack
+        overtime. The in-progress current payroll week is shown above but excluded from these averages.
+      </p>
 
       <SectionTitle
         title="Week-by-Week Trend"

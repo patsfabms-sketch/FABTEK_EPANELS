@@ -1365,6 +1365,142 @@ export function computeWeekdayCapacityReport(panels, workHistory, { now = Date.n
   };
 }
 
+// Answers a sharper version of the same staffing question as
+// computeWeekdayCapacityReport above, but sliced by LABOR HOURS instead of
+// calendar day-of-week: "with the crew we actually have, what do we ship on
+// a straight 40-hr week per person, versus what does overtime actually buy
+// us on top of that" — as opposed to the weekday/weekend split above, which
+// can't tell a technician staying late on a Tuesday apart from one working a
+// normal Tuesday.
+//
+// There's no way to know which specific clocked hour built which specific
+// panel, so — same deliberate, clearly-labeled approximation already used
+// by computeOvertimeCostByBuild above — each payroll week's real (non-admin)
+// shipped-panel count is split across that week's shop-wide regular vs.
+// overtime hours in direct proportion to how many of each were worked, using
+// one flat panels-per-labor-hour rate for the week. This isn't a claim that
+// overtime hours are individually as productive as regular ones — it's the
+// simplest honest way to turn "X panels shipped on Y total hours, Z of them
+// overtime" into a same-week, apples-to-apples comparison, rather than
+// comparing distinct weeks that happened to have or lack overtime (which, at
+// this shop's current data volume, would mostly just compare noise).
+//
+// Reuses the exact same real-shipped-panel definition (isShippedSessionRow,
+// loggedByAdmin excluded, same "Mark as Sent" backlog-timestamp problem
+// documented on computeWeekdayCapacityReport and computeWeeklyProfitAndLoss
+// above) and the same payroll week (Wednesday-anchored) every other
+// hours/pay view in this app already uses (Payroll, Week-to-Week
+// Performance, Team's capacity bar). The still-in-progress current payroll
+// week is always returned (tagged `inProgress`) but excluded from the
+// averages, same "don't let a partial period drag the number down" rule
+// used everywhere else in this app that ticks with `now`.
+export function computeCapacityByHoursMix(panels, workHistory, clockLog, employees, { now = Date.now() } = {}) {
+  const perBuildShipTs = new Map();
+  workHistory
+    .filter((h) => isShippedSessionRow(h) && !h.loggedByAdmin)
+    .forEach((h) => {
+      const t = new Date(h.endedAt || h.createdAt).getTime();
+      if (Number.isNaN(t)) return;
+      const existing = perBuildShipTs.get(h.buildId);
+      if (existing === undefined || t < existing) perBuildShipTs.set(h.buildId, t);
+    });
+
+  const activeDayKeys = new Set();
+  workHistory.forEach((h) => {
+    if (h.loggedByAdmin || !h.createdAt) return;
+    const t = new Date(h.createdAt).getTime();
+    if (!Number.isNaN(t)) {
+      const key = dayKeyFor(t);
+      if (key) activeDayKeys.add(key);
+    }
+  });
+  clockLog.forEach((c) => {
+    if (!c.clockedInAt) return;
+    const key = dayKeyFor(c.clockedInAt);
+    if (key) activeDayKeys.add(key);
+  });
+  activeDayKeys.delete(dayKeyFor(now)); // today is still in progress — never a complete weekday
+
+  const weekdayActivityCount = new Map(); // payroll week key -> # distinct Mon-Fri days with real activity
+  activeDayKeys.forEach((key) => {
+    const ts = new Date(`${key}T12:00:00`).getTime(); // midday: safely inside the day regardless of local TZ
+    if (Number.isNaN(ts)) return;
+    const dow = new Date(ts).getDay();
+    if (dow === 0 || dow === 6) return; // weekends don't count toward a "panels per weekday" denominator
+    const wk = payrollWeekKey(new Date(ts));
+    weekdayActivityCount.set(wk, (weekdayActivityCount.get(wk) ?? 0) + 1);
+  });
+
+  const shippedByWeek = new Map();
+  perBuildShipTs.forEach((t) => {
+    const wk = payrollWeekKey(new Date(t));
+    shippedByWeek.set(wk, (shippedByWeek.get(wk) ?? 0) + 1);
+  });
+
+  const currentWeekKey = payrollWeekKey(new Date(now));
+  const allWeekKeys = new Set([...shippedByWeek.keys(), ...weekdayActivityCount.keys()]);
+
+  const weeks = Array.from(allWeekKeys)
+    .sort()
+    .map((wk) => {
+      const [y, m, d] = wk.split("-").map(Number);
+      const { start, end } = payrollWeekRange(new Date(y, m - 1, d));
+      let regularHours = 0;
+      let overtimeHours = 0;
+      employees.forEach((emp) => {
+        const pay = computeOvertimePay(clockLog, emp, start, end, { now });
+        regularHours += pay.regularHours;
+        overtimeHours += pay.overtimeHours;
+      });
+      regularHours = Number(regularHours.toFixed(2));
+      overtimeHours = Number(overtimeHours.toFixed(2));
+      const totalHours = Number((regularHours + overtimeHours).toFixed(2));
+      const shipped = shippedByWeek.get(wk) ?? 0;
+      const weekdaysActive = weekdayActivityCount.get(wk) ?? 0;
+      const panelsPerHour = totalHours > 0 ? shipped / totalHours : null;
+      const regularAttributedPanels = panelsPerHour !== null ? panelsPerHour * regularHours : 0;
+      const overtimeAttributedPanels = panelsPerHour !== null ? panelsPerHour * overtimeHours : 0;
+      return {
+        weekOf: wk,
+        inProgress: wk === currentWeekKey,
+        shipped,
+        weekdaysActive,
+        regularHours,
+        overtimeHours,
+        totalHours,
+        regularAttributedPanels: Number(regularAttributedPanels.toFixed(2)),
+        overtimeAttributedPanels: Number(overtimeAttributedPanels.toFixed(2)),
+      };
+    });
+
+  const includedWeeks = weeks.filter((w) => !w.inProgress && w.weekdaysActive > 0);
+  const totalWeekdaysActive = includedWeeks.reduce((s, w) => s + w.weekdaysActive, 0);
+  const totalRegularAttributed = includedWeeks.reduce((s, w) => s + w.regularAttributedPanels, 0);
+  const totalOvertimeAttributed = includedWeeks.reduce((s, w) => s + w.overtimeAttributedPanels, 0);
+  const totalOvertimeHours = Number(includedWeeks.reduce((s, w) => s + w.overtimeHours, 0).toFixed(2));
+
+  const avgPanelsPerDayAt40 =
+    totalWeekdaysActive > 0 ? Number((totalRegularAttributed / totalWeekdaysActive).toFixed(2)) : null;
+  const avgPanelsPerDayWithOt =
+    totalWeekdaysActive > 0
+      ? Number(((totalRegularAttributed + totalOvertimeAttributed) / totalWeekdaysActive).toFixed(2))
+      : null;
+  const otContributionPerDay =
+    avgPanelsPerDayAt40 !== null && avgPanelsPerDayWithOt !== null
+      ? Number((avgPanelsPerDayWithOt - avgPanelsPerDayAt40).toFixed(2))
+      : null;
+
+  return {
+    weeks: weeks.slice().sort((a, b) => (a.weekOf < b.weekOf ? 1 : a.weekOf > b.weekOf ? -1 : 0)),
+    weeksIncluded: includedWeeks.length,
+    totalWeekdaysActive,
+    totalOvertimeHours,
+    avgPanelsPerDayAt40,
+    avgPanelsPerDayWithOt,
+    otContributionPerDay,
+  };
+}
+
 // Powers the "Estimate a New Panel" calculator on Reports.jsx: given which
 // stages a hypothetical panel's routing will actually go through and how
 // many connections it's expected to need, projects total build hours.
