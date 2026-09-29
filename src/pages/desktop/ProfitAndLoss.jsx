@@ -1,13 +1,73 @@
 import { useEffect, useMemo, useState } from "react";
+import { BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { useApp } from "../../context/AppContext";
 import {
   computeWeeklyProfitAndLoss,
   computeMarginDrivers,
+  computeMarginDriversTrend,
   computeProfitAndLossTrend,
   payrollWeekStart,
   payrollWeekRange,
 } from "../../data/mockData";
-import { Card, SectionTitle, StatCard, Button, formatCurrency, formatDate } from "../../components/ui";
+import { Card, SectionTitle, StatCard, Button, formatCurrency, formatNumber, formatDate } from "../../components/ui";
+
+// Fixed categorical hue per metric, in the same order the cards render —
+// each metric gets its own small bar chart (a "small multiple") rather
+// than one chart with six differently-scaled series on it, since Panels
+// Shipped (tens), Connections Credited (thousands), and Packout Issues
+// (single digits) can't honestly share one y-axis. The in-progress
+// (current) week's bar is rendered at reduced opacity in every chart —
+// same "still accruing, not a finished number" convention the rest of
+// this page already uses (see the trend table's opacity-60 row).
+const DRIVER_METRICS = [
+  { key: "shippedCount", label: "Panels Shipped", sub: "Completed Wrap", color: "#2a78d6", unit: "" },
+  { key: "otHours", label: "OT Hours (shop-wide)", sub: "Clocked hours over 40/wk", color: "#eb6834", unit: " hrs" },
+  { key: "connectionsCredited", label: "Connections Credited", sub: "Route/Terminate", color: "#1baf7a", unit: "" },
+  { key: "reworkSessions", label: "Rework Sessions", sub: "Logged at the Rework stage", color: "#eda100", unit: "", hoursKey: "reworkHours" },
+  { key: "flaggedSessions", label: "Flagged Sessions", sub: "Needs a manager's review", color: "#e87ba4", unit: "" },
+  { key: "packoutIssuesReported", label: "Packout Issues Reported", sub: "Missing parts at kit verification", color: "#008300", unit: "" },
+];
+
+function shortWeekLabel(weekOf) {
+  const d = new Date(`${weekOf}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return weekOf;
+  return d.toLocaleDateString("en-US", { month: "numeric", day: "numeric" });
+}
+
+function MetricBarChart({ metric, data }) {
+  return (
+    <Card>
+      <div className="flex items-baseline justify-between mb-1">
+        <p className="text-[13px] font-semibold text-ink-900">{metric.label}</p>
+        <p className="text-[11px] text-ink-400">{metric.sub}</p>
+      </div>
+      <ResponsiveContainer width="100%" height={150}>
+        <BarChart data={data} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+          <CartesianGrid vertical={false} stroke="#eef2f6" />
+          <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#6b7a88" }} axisLine={false} tickLine={false} />
+          <YAxis tick={{ fontSize: 10, fill: "#6b7a88" }} axisLine={false} tickLine={false} allowDecimals={false} tickFormatter={(v) => formatNumber(v)} />
+          <Tooltip
+            cursor={{ fill: "#f5f7fa" }}
+            contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8ee" }}
+            formatter={(value, _name, item) => {
+              const hrs = metric.hoursKey ? item.payload[metric.hoursKey] : null;
+              return [`${formatNumber(value)}${metric.unit}${hrs != null ? ` (${hrs} hrs)` : ""}`, metric.label];
+            }}
+            labelFormatter={(label, items) => {
+              const wk = items?.[0]?.payload;
+              return `Week of ${label}${wk?.inProgress ? " (in progress)" : ""}`;
+            }}
+          />
+          <Bar dataKey={metric.key} radius={[4, 4, 0, 0]} maxBarSize={32}>
+            {data.map((w) => (
+              <Cell key={w.weekOf} fill={metric.color} fillOpacity={w.inProgress ? 0.45 : 1} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </Card>
+  );
+}
 
 // Profit & Loss — its own page (split out of Payroll at Pat's request) so
 // it's easy to come back to and compare week over week, rather than being
@@ -67,6 +127,46 @@ export default function ProfitAndLoss() {
     [panels, workHistory, clockLog, employees, now]
   );
 
+  // Last 12 payroll weeks' driver metrics, for the "What's Changing Margin"
+  // bar charts below — a superset of `trend` (adds OT/connections/rework/
+  // flagged/packout on top of revenue/cost/profit) since the chart is a
+  // separate comparison tool from the week-by-week $ table further down.
+  const driversTrend = useMemo(
+    () => computeMarginDriversTrend(panels, workHistory, clockLog, employees, { weeks: 12, now }),
+    [panels, workHistory, clockLog, employees, now]
+  );
+
+  // null = "no explicit choice yet" -> defaults to the 4 most recent weeks
+  // (current + 3 prior), so the charts show a meaningful comparison the
+  // moment the page loads rather than starting empty. Once the admin picks
+  // weeks explicitly, that selection sticks (independent of the Prev/Next
+  // Week arrows above, which only move the single-week snapshot/table).
+  const [selectedWeeks, setSelectedWeeks] = useState(null);
+  const MAX_COMPARE_WEEKS = 6;
+  const effectiveSelectedWeeks = useMemo(
+    () => selectedWeeks ?? driversTrend.slice(0, 4).map((w) => w.weekOf),
+    [selectedWeeks, driversTrend]
+  );
+  const chartData = useMemo(
+    () =>
+      driversTrend
+        .filter((w) => effectiveSelectedWeeks.includes(w.weekOf))
+        .sort((a, b) => a.weekStart - b.weekStart)
+        .map((w) => ({ ...w, label: shortWeekLabel(w.weekOf) })),
+    [driversTrend, effectiveSelectedWeeks]
+  );
+  const toggleCompareWeek = (weekOf) => {
+    setSelectedWeeks((prev) => {
+      const base = prev ?? driversTrend.slice(0, 4).map((w) => w.weekOf);
+      if (base.includes(weekOf)) {
+        if (base.length <= 1) return base; // always keep at least one week charted
+        return base.filter((w) => w !== weekOf);
+      }
+      if (base.length >= MAX_COMPARE_WEEKS) return base;
+      return [...base, weekOf];
+    });
+  };
+
   return (
     <div className="p-6 max-w-[1200px] mx-auto">
       <div className="flex items-start justify-between mb-6 flex-wrap gap-3">
@@ -116,58 +216,48 @@ export default function ProfitAndLoss() {
 
       <SectionTitle
         title="What's Changing Margin"
-        subtitle="Real, already-tracked shop signals compared to last week — not a claim about which one caused the swing"
+        subtitle="Real, already-tracked shop signals, charted per week — not a claim about which one caused the swing"
       />
       <Card className="mb-3">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3 text-[13px]">
-          <div className="flex items-center justify-between border-b border-paper-100 pb-2">
-            <span className="text-ink-600">OT hours (shop-wide)</span>
-            <span className="text-right">
-              <span className="font-semibold text-ink-900">{drivers.current.otHours}</span>
-              <span className="text-ink-400"> vs {drivers.previous.otHours}</span>{" "}
-              <DeltaLine value={drivers.deltas.otHours} suffix=" hrs" goodDirection="down" />
-            </span>
-          </div>
-          <div className="flex items-center justify-between border-b border-paper-100 pb-2">
-            <span className="text-ink-600">Connections credited</span>
-            <span className="text-right">
-              <span className="font-semibold text-ink-900">{drivers.current.connectionsCredited}</span>
-              <span className="text-ink-400"> vs {drivers.previous.connectionsCredited}</span>{" "}
-              <DeltaLine value={drivers.deltas.connectionsCredited} goodDirection="up" />
-            </span>
-          </div>
-          <div className="flex items-center justify-between border-b border-paper-100 pb-2">
-            <span className="text-ink-600">Rework sessions ({drivers.current.reworkHours} hrs)</span>
-            <span className="text-right">
-              <span className="font-semibold text-ink-900">{drivers.current.reworkSessions}</span>
-              <span className="text-ink-400"> vs {drivers.previous.reworkSessions}</span>{" "}
-              <DeltaLine value={drivers.deltas.reworkSessions} goodDirection="down" />
-            </span>
-          </div>
-          <div className="flex items-center justify-between border-b border-paper-100 pb-2 sm:border-b-0">
-            <span className="text-ink-600">Flagged sessions</span>
-            <span className="text-right">
-              <span className="font-semibold text-ink-900">{drivers.current.flaggedSessions}</span>
-              <span className="text-ink-400"> vs {drivers.previous.flaggedSessions}</span>{" "}
-              <DeltaLine value={drivers.deltas.flaggedSessions} goodDirection="down" />
-            </span>
-          </div>
-          <div className="flex items-center justify-between pt-1 sm:pt-0">
-            <span className="text-ink-600">Packout issues reported</span>
-            <span className="text-right">
-              <span className="font-semibold text-ink-900">{drivers.current.packoutIssuesReported}</span>
-              <span className="text-ink-400"> vs {drivers.previous.packoutIssuesReported}</span>{" "}
-              <DeltaLine value={drivers.deltas.packoutIssuesReported} goodDirection="down" />
-            </span>
-          </div>
+        <p className="text-[11px] font-semibold text-ink-500 uppercase tracking-wide mb-2">
+          Compare weeks ({effectiveSelectedWeeks.length}/{MAX_COMPARE_WEEKS})
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {driversTrend.map((w) => {
+            const isOn = effectiveSelectedWeeks.includes(w.weekOf);
+            const atCap = !isOn && effectiveSelectedWeeks.length >= MAX_COMPARE_WEEKS;
+            return (
+              <button
+                key={w.weekOf}
+                type="button"
+                onClick={() => toggleCompareWeek(w.weekOf)}
+                disabled={atCap}
+                title={atCap ? `Up to ${MAX_COMPARE_WEEKS} weeks at once` : undefined}
+                className={`text-[12px] font-semibold px-2.5 py-1 rounded-full border transition-colors ${
+                  isOn
+                    ? "bg-brand-500/10 border-brand-500/40 text-brand-700"
+                    : atCap
+                    ? "border-paper-200 text-ink-300 cursor-not-allowed"
+                    : "border-paper-200 text-ink-500 hover:border-paper-300 hover:text-ink-700"
+                }`}
+              >
+                {shortWeekLabel(w.weekOf)}
+                {w.inProgress && <span className="text-ink-400"> (in progress)</span>}
+              </button>
+            );
+          })}
         </div>
       </Card>
-      <p className="text-[11px] text-ink-400 mt-2 mb-8">
-        These are the shop signals most likely to explain a margin swing — they're shown side by side so you can
-        judge for yourself what's actually behind it, not asserted as the cause. "Good direction" coloring is a
-        simplification (e.g. more connections credited is shown as favorable, more rework as unfavorable) — read the
-        raw numbers, not just the color, since a real explanation can cut the other way (more OT can also mean more
-        got shipped).
+
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mb-3">
+        {DRIVER_METRICS.map((metric) => (
+          <MetricBarChart key={metric.key} metric={metric} data={chartData} />
+        ))}
+      </div>
+      <p className="text-[11px] text-ink-400 mt-1 mb-8">
+        These are the shop signals most likely to explain a margin swing, charted for whichever weeks are checked
+        above — side by side so you can judge for yourself what's actually behind it, not asserted as the cause. A
+        faded bar is the current, still-in-progress week — its numbers will keep moving until the week closes.
       </p>
 
       <SectionTitle title="Shipped This Week" subtitle="Panels behind the revenue figure above" />

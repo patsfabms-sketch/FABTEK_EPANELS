@@ -2003,6 +2003,38 @@ export function computeProfitAndLossTrend(panels, workHistory, clockLog, employe
   return out;
 }
 
+// Multi-week version of pnlWithDrivers, for the ProfitAndLoss page's
+// "What's Changing Margin" bar charts — Pat wanted to compare more than
+// just this-week-vs-last-week ("instead of going back and forth comparing
+// weeks... an option to compare prior weeks and those bars are side by
+// side"), so this returns every driver metric (not just revenue/cost/
+// profit/margin the way computeProfitAndLossTrend does) for each of the
+// last `weeks` payroll weeks, most-recent-first, so the page can let
+// someone pick any subset of weeks and chart them side by side per metric.
+export function computeMarginDriversTrend(panels, workHistory, clockLog, employees, { weeks = 12, now = Date.now() } = {}) {
+  const currentWeekStart = payrollWeekStart(new Date(now));
+  const out = [];
+  for (let i = 0; i < weeks; i++) {
+    const start = new Date(currentWeekStart);
+    start.setDate(start.getDate() - 7 * i);
+    const { start: rangeStart, end: rangeEnd } = payrollWeekRange(start);
+    const d = pnlWithDrivers(panels, workHistory, clockLog, employees, rangeStart, rangeEnd, { now });
+    out.push({
+      weekOf: payrollWeekKey(start),
+      weekStart: start.getTime(),
+      inProgress: i === 0,
+      shippedCount: d.shippedCount,
+      otHours: d.otHours,
+      connectionsCredited: d.connectionsCredited,
+      reworkSessions: d.reworkSessions,
+      reworkHours: d.reworkHours,
+      flaggedSessions: d.flaggedSessions,
+      packoutIssuesReported: d.packoutIssuesReported,
+    });
+  }
+  return out;
+}
+
 // Attributes overtime PREMIUM cost (the extra OVERTIME_MULTIPLIER-1 on top
 // of what those hours would have cost at straight time — the actual added
 // cost overtime causes, which is the number that matters for "should this
