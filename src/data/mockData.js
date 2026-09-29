@@ -2003,6 +2003,67 @@ export function computeProfitAndLossTrend(panels, workHistory, clockLog, employe
   return out;
 }
 
+// The first payroll week the live/overall margin below counts from. Pat,
+// on the day this shipped: "i cant really count the first week of
+// september because the site wasnt fully up and running." The shop's very
+// first logged session was 2026-08-31 (a Monday), which only gives the
+// payroll week of 2026-08-26 two real days on file — clearly a stub, not a
+// real week. The payroll week right after that (2026-09-02) already shows
+// normal-looking volume in the live data, but it's still the calendar
+// "first week of September" Pat is calling out as not representative, so
+// tracking starts at the payroll week AFTER that one. This is a single
+// named constant specifically so it's a one-line change if this cutoff
+// needs to move once there's a clearer sense of exactly when the site was
+// "fully up and running."
+export const MARGIN_TRACKING_START_DATE = "2026-09-09";
+
+// A live, cumulative profit-margin figure for the top of the ProfitAndLoss
+// page — Pat's request: "i need to have a live profit margin percentage at
+// the top of the page. that goes up and down." Unlike the single selected
+// week's margin (the Profit stat tile below, which only ever reflects
+// whichever week Prev/Next Week has navigated to), this sums real revenue
+// and real payroll cost across every payroll week from `trackingStart`
+// through the payroll week containing `now` (the current, still-in-progress
+// week included) and reports ONE overall margin — so it moves as real data
+// accrues (a slow week drags it down, a strong one pulls it back up),
+// rather than resetting to a single week's noisy figure every time someone
+// looks. Reuses computeWeeklyProfitAndLoss per week (same revenue
+// recognition, same loggedByAdmin/backlog-correction exclusion already
+// established for weekly P&L — see that function's own comment) rather
+// than re-deriving the math, so this can never disagree with what the
+// week-by-week table below it already shows for any individual week.
+export function computeLiveProfitMargin(panels, workHistory, clockLog, employees, { trackingStart = MARGIN_TRACKING_START_DATE, now = Date.now() } = {}) {
+  const trackingStartMs = payrollWeekStart(new Date(`${trackingStart}T00:00:00`)).getTime();
+  const currentWeekStartMs = payrollWeekStart(new Date(now)).getTime();
+
+  if (trackingStartMs > currentWeekStartMs) {
+    return { revenue: 0, payrollCost: 0, profit: 0, marginPct: null, weeksCounted: 0, trackingStart: trackingStartMs };
+  }
+
+  let revenue = 0;
+  let payrollCost = 0;
+  let weeksCounted = 0;
+  for (let ws = trackingStartMs; ws <= currentWeekStartMs; ws += 7 * 86400000) {
+    const { start, end } = payrollWeekRange(new Date(ws));
+    const pnl = computeWeeklyProfitAndLoss(panels, workHistory, clockLog, employees, start, end, { now });
+    revenue += pnl.revenue;
+    payrollCost += pnl.payrollCost;
+    weeksCounted++;
+  }
+  revenue = Number(revenue.toFixed(2));
+  payrollCost = Number(payrollCost.toFixed(2));
+  const profit = Number((revenue - payrollCost).toFixed(2));
+
+  return {
+    revenue,
+    payrollCost,
+    profit,
+    marginPct: revenue > 0 ? Math.round((profit / revenue) * 100) : null,
+    weeksCounted,
+    trackingStart: trackingStartMs,
+  };
+}
+
 // Multi-week version of pnlWithDrivers, for the ProfitAndLoss page's
 // "What's Changing Margin" bar charts — Pat wanted to compare more than
 // just this-week-vs-last-week ("instead of going back and forth comparing

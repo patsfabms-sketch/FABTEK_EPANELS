@@ -6,6 +6,8 @@ import {
   computeMarginDrivers,
   computeMarginDriversTrend,
   computeProfitAndLossTrend,
+  computeLiveProfitMargin,
+  MARGIN_TRACKING_START_DATE,
   payrollWeekStart,
   payrollWeekRange,
 } from "../../data/mockData";
@@ -127,6 +129,31 @@ export default function ProfitAndLoss() {
     [panels, workHistory, clockLog, employees, now]
   );
 
+  // Live, cumulative margin for the hero stat at the top of the page — Pat:
+  // "i need to have a live profit margin percentage at the top of the page.
+  // that goes up and down." This is deliberately NOT tied to the Prev/Next
+  // Week selector above (it always reflects real time, "now", regardless of
+  // which single week is being browsed below) and deliberately excludes the
+  // ramp-up period before the site was fully up and running (see
+  // MARGIN_TRACKING_START_DATE's own comment). `liveMarginBeforeThisWeek`
+  // recomputes the same cumulative figure as of right before the current
+  // payroll week started, purely so the hero stat can show whether this
+  // week's activity is pulling the overall number up or down, not as a
+  // separate metric of its own.
+  const liveMargin = useMemo(
+    () => computeLiveProfitMargin(panels, workHistory, clockLog, employees, { now }),
+    [panels, workHistory, clockLog, employees, now]
+  );
+  const liveMarginBeforeThisWeek = useMemo(
+    () => computeLiveProfitMargin(panels, workHistory, clockLog, employees, { now: payrollWeekStart(new Date(now)).getTime() - 1 }),
+    [panels, workHistory, clockLog, employees, now]
+  );
+  const liveMarginDelta =
+    liveMargin.marginPct !== null && liveMarginBeforeThisWeek.marginPct !== null
+      ? liveMargin.marginPct - liveMarginBeforeThisWeek.marginPct
+      : null;
+  const trackingStartLabel = new Date(`${MARGIN_TRACKING_START_DATE}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+
   // Last 12 payroll weeks' driver metrics, for the "What's Changing Margin"
   // bar charts below — a superset of `trend` (adds OT/connections/rework/
   // flagged/packout on top of revenue/cost/profit) since the chart is a
@@ -193,6 +220,46 @@ export default function ProfitAndLoss() {
           </Button>
         </div>
       </div>
+
+      <Card className="mb-6">
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-good-500 opacity-60" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-good-500" />
+              </span>
+              <p className="text-[11px] font-semibold text-ink-500 uppercase tracking-wide">Live Overall Profit Margin</p>
+            </div>
+            <p className="text-[11px] text-ink-400 mt-1">
+              Real revenue vs. real payroll cost, every payroll week since {trackingStartLabel} ({liveMargin.weeksCounted} week
+              {liveMargin.weeksCounted === 1 ? "" : "s"} counted, this week included) — the first couple of weeks in
+              September aren't counted since the site wasn't fully up and running yet.
+            </p>
+          </div>
+          <div className="text-right">
+            <p
+              className={`text-4xl font-bold leading-none ${
+                liveMargin.marginPct === null ? "text-ink-400" : liveMargin.marginPct >= 0 ? "text-good-600" : "text-bad-600"
+              }`}
+            >
+              {liveMargin.marginPct !== null ? `${liveMargin.marginPct}%` : "—"}
+            </p>
+            <p className="text-[11px] mt-1">
+              {liveMarginDelta === null ? (
+                <span className="text-ink-400">no prior data</span>
+              ) : liveMarginDelta === 0 ? (
+                <span className="text-ink-400">unchanged this week</span>
+              ) : (
+                <span className={`font-semibold ${liveMarginDelta > 0 ? "text-good-600" : "text-bad-600"}`}>
+                  {liveMarginDelta > 0 ? "▲" : "▼"} {Math.abs(liveMarginDelta)} pt{Math.abs(liveMarginDelta) === 1 ? "" : "s"} this
+                  week
+                </span>
+              )}
+            </p>
+          </div>
+        </div>
+      </Card>
 
       <div className="flex flex-wrap gap-4 mb-2">
         <StatCard
