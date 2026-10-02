@@ -87,13 +87,13 @@ export default function CapacityReport() {
 
       <SectionTitle
         title="Output vs. Overtime"
-        subtitle="Same crew — how much of our output comes from a straight 40-hr week vs. what overtime adds on top"
+        subtitle="Internal planning number, not the Siemens figure above — every day counts here (weekday doesn't matter), based on 40 hrs/week of capacity per employee, reset every payroll week (Wed 12am)"
       />
       <div className="flex flex-wrap gap-4 mb-3">
         <StatCard
           label="Avg Panels/Day at 40 Hrs"
           value={hoursMix.avgPanelsPerDayAt40 !== null ? hoursMix.avgPanelsPerDayAt40 : "—"}
-          sub="if the crew only worked their regular 40 hrs/week"
+          sub="if the crew only worked their regular 40 hrs/week — any day, not just Mon–Fri"
         />
         <StatCard
           label="Avg Panels/Day with OT"
@@ -115,6 +115,7 @@ export default function CapacityReport() {
             <thead>
               <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
                 <th className="px-4 py-3 font-semibold">Payroll Week Of</th>
+                <th className="px-4 py-3 font-semibold">Days Active</th>
                 <th className="px-4 py-3 font-semibold">Shipped</th>
                 <th className="px-4 py-3 font-semibold">Regular Hrs</th>
                 <th className="px-4 py-3 font-semibold">OT Hrs</th>
@@ -129,6 +130,7 @@ export default function CapacityReport() {
                     {formatDate(w.weekOf)}
                     {w.inProgress && <span className="ml-2 text-[10px] text-ink-400 uppercase tracking-wide">In progress</span>}
                   </td>
+                  <td className="px-4 py-2.5 text-ink-700">{w.daysActive}</td>
                   <td className="px-4 py-2.5 text-ink-700">{w.shipped}</td>
                   <td className="px-4 py-2.5 text-ink-700">{w.regularHours}</td>
                   <td className="px-4 py-2.5 text-ink-700">{w.overtimeHours}</td>
@@ -147,7 +149,10 @@ export default function CapacityReport() {
         isn't a claim that an overtime hour is exactly as productive as a regular one, just the simplest honest way to
         turn "X panels on Y total hours, Z of them overtime" into an apples-to-apples 40-hrs-vs-with-OT comparison
         using the same week's real data, rather than comparing different weeks that happened to have or lack
-        overtime. The in-progress current payroll week is shown above but excluded from these averages.
+        overtime. Every day with real logged activity counts toward "Days Active" above, Saturday and Sunday
+        included — unlike the Mon–Fri-only figures above, this section isn't the Siemens proof, it's your own
+        planning number for what a day of capacity is actually worth. The in-progress current payroll week is shown
+        above but excluded from these averages.
       </p>
 
       <SectionTitle

@@ -1,5 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
-import { BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import {
+  BarChart,
+  Bar,
+  Cell,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+  AreaChart,
+  Area,
+  ReferenceLine,
+} from "recharts";
 import { useApp } from "../../context/AppContext";
 import {
   computeWeeklyProfitAndLoss,
@@ -7,6 +19,7 @@ import {
   computeMarginDriversTrend,
   computeProfitAndLossTrend,
   computeLiveProfitMargin,
+  computeLiveProfitMarginHistory,
   MARGIN_TRACKING_START_DATE,
   payrollWeekStart,
   payrollWeekRange,
@@ -93,6 +106,86 @@ function DeltaLine({ value, suffix = "", goodDirection = "up", formatter = (n) =
   );
 }
 
+function shortDayLabel(dateStr) {
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString("en-US", { month: "numeric", day: "numeric" });
+}
+
+// The "ticker" chart Pat asked for: "i think it would look cool to also
+// have a live chart like a stock on the nyse. something like a robinhood
+// setup." One series (the same cumulative margin the hero number shows),
+// so no legend box is needed — the card's own title already says what's
+// plotted. Colored green/red by whether the line is net up or down over
+// the whole visible stretch (the same read as a stock chart's day color),
+// not per-point, so the color stays one consistent signal rather than
+// flickering per day. A dashed 0% reference line is included since margin
+// (unlike a share price) can actually go negative, and today's point gets
+// its own end-marker so the current, still-moving value is visually
+// distinct from the settled history behind it.
+function LiveMarginChart({ data }) {
+  if (data.length < 2) {
+    return (
+      <div className="flex items-center justify-center h-[140px] text-[12px] text-ink-400">
+        Not enough days tracked yet to chart a trend — check back after a few more days.
+      </div>
+    );
+  }
+  const first = data[0].marginPct ?? 0;
+  const last = data[data.length - 1].marginPct ?? 0;
+  const isUp = last >= first;
+  const color = isUp ? "#1fa971" : "#d94848"; // good-500 / bad-500 — same tokens the rest of this page uses for margin sign
+  const gradientId = isUp ? "fillMarginUp" : "fillMarginDown";
+
+  return (
+    <ResponsiveContainer width="100%" height={140}>
+      <AreaChart data={data} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor={color} stopOpacity={0.28} />
+            <stop offset="95%" stopColor={color} stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid vertical={false} stroke="#eef2f6" />
+        <XAxis
+          dataKey="date"
+          tickFormatter={shortDayLabel}
+          tick={{ fontSize: 10, fill: "#6b7a88" }}
+          axisLine={false}
+          tickLine={false}
+          interval={Math.max(0, Math.ceil(data.length / 7) - 1)}
+        />
+        <YAxis
+          tick={{ fontSize: 10, fill: "#6b7a88" }}
+          axisLine={false}
+          tickLine={false}
+          width={36}
+          tickFormatter={(v) => `${v}%`}
+        />
+        <ReferenceLine y={0} stroke="#c9d3dc" strokeDasharray="3 3" />
+        <Tooltip
+          cursor={{ stroke: "#c9d3dc", strokeWidth: 1 }}
+          contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8ee" }}
+          formatter={(value) => [value === null ? "no revenue yet" : `${value}%`, "Overall margin"]}
+          labelFormatter={(label, items) => {
+            const pt = items?.[0]?.payload;
+            return `${shortDayLabel(label)}${pt?.isToday ? " (today, still moving)" : ""}`;
+          }}
+        />
+        <Area
+          type="monotone"
+          dataKey="marginPct"
+          stroke={color}
+          strokeWidth={2}
+          fill={`url(#${gradientId})`}
+          dot={false}
+          activeDot={{ r: 4, stroke: "#fff", strokeWidth: 2, fill: color }}
+        />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+}
+
 export default function ProfitAndLoss() {
   const { panels, workHistory, clockLog, employees } = useApp();
   const [now, setNow] = useState(() => Date.now());
@@ -153,6 +246,14 @@ export default function ProfitAndLoss() {
       ? liveMargin.marginPct - liveMarginBeforeThisWeek.marginPct
       : null;
   const trackingStartLabel = new Date(`${MARGIN_TRACKING_START_DATE}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+
+  // Day-by-day series behind the "stock ticker" chart in the hero card —
+  // see computeLiveProfitMarginHistory's own comment for why this has to
+  // stay week-scoped internally even though it returns one point per day.
+  const marginHistory = useMemo(
+    () => computeLiveProfitMarginHistory(panels, workHistory, clockLog, employees, { now }),
+    [panels, workHistory, clockLog, employees, now]
+  );
 
   // Last 12 payroll weeks' driver metrics, for the "What's Changing Margin"
   // bar charts below — a superset of `trend` (adds OT/connections/rework/
@@ -233,8 +334,8 @@ export default function ProfitAndLoss() {
             </div>
             <p className="text-[11px] text-ink-400 mt-1">
               Real revenue vs. real payroll cost, every payroll week since {trackingStartLabel} ({liveMargin.weeksCounted} week
-              {liveMargin.weeksCounted === 1 ? "" : "s"} counted, this week included) — the first couple of weeks in
-              September aren't counted since the site wasn't fully up and running yet.
+              {liveMargin.weeksCounted === 1 ? "" : "s"} counted, this week included) — everything before that is left out
+              since the site wasn't fully up and running yet.
             </p>
           </div>
           <div className="text-right">
@@ -259,6 +360,13 @@ export default function ProfitAndLoss() {
             </p>
           </div>
         </div>
+        <div className="mt-3 -mx-1">
+          <LiveMarginChart data={marginHistory} />
+        </div>
+        <p className="text-[11px] text-ink-400 mt-1">
+          Every tracked day since {trackingStartLabel}, cumulative — not one day's own margin in isolation. Today's
+          point is still moving as more work gets logged.
+        </p>
       </Card>
 
       <div className="flex flex-wrap gap-4 mb-2">

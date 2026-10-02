@@ -1365,13 +1365,25 @@ export function computeWeekdayCapacityReport(panels, workHistory, { now = Date.n
   };
 }
 
-// Answers a sharper version of the same staffing question as
-// computeWeekdayCapacityReport above, but sliced by LABOR HOURS instead of
-// calendar day-of-week: "with the crew we actually have, what do we ship on
-// a straight 40-hr week per person, versus what does overtime actually buy
-// us on top of that" — as opposed to the weekday/weekend split above, which
-// can't tell a technician staying late on a Tuesday apart from one working a
-// normal Tuesday.
+// Answers Pat's actual planning question (clarified Oct 2 — distinct from
+// the Siemens-facing Mon-Fri proof in computeWeekdayCapacityReport above):
+// "how many panels can I get out a day on average, based on 40 hrs/week of
+// capacity per employee — the weekday doesn't matter." Two things this
+// deliberately does NOT do, both on Pat's explicit instruction:
+//
+// 1. It does not restrict which days count. computeWeekdayCapacityReport
+//    exists specifically to prove a Monday-Friday figure to Siemens for an
+//    overtime-pay negotiation, so it's right that it keeps weekend output
+//    out of that average. This function answers a different, internal
+//    question — total realistic daily throughput — so every day with real
+//    logged activity counts toward the denominator here, Saturday and
+//    Sunday included.
+// 2. It does not slice by calendar day-of-week at all — it slices by LABOR
+//    HOURS: "with the crew we actually have, what do we ship on a straight
+//    40-hr week per person, versus what does overtime actually buy us on
+//    top of that." That's a sharper question than day-of-week can answer on
+//    its own, since day-of-week can't tell a technician staying late on a
+//    Tuesday apart from one working a normal Tuesday.
 //
 // There's no way to know which specific clocked hour built which specific
 // panel, so — same deliberate, clearly-labeled approximation already used
@@ -1388,12 +1400,15 @@ export function computeWeekdayCapacityReport(panels, workHistory, { now = Date.n
 // Reuses the exact same real-shipped-panel definition (isShippedSessionRow,
 // loggedByAdmin excluded, same "Mark as Sent" backlog-timestamp problem
 // documented on computeWeekdayCapacityReport and computeWeeklyProfitAndLoss
-// above) and the same payroll week (Wednesday-anchored) every other
-// hours/pay view in this app already uses (Payroll, Week-to-Week
-// Performance, Team's capacity bar). The still-in-progress current payroll
-// week is always returned (tagged `inProgress`) but excluded from the
-// averages, same "don't let a partial period drag the number down" rule
-// used everywhere else in this app that ticks with `now`.
+// above) and the same payroll week (Wednesday-anchored, "starts over every
+// Wednesday morning") every other hours/pay view in this app already uses
+// (Payroll, Week-to-Week Performance, Team's capacity bar) — the 40-hour
+// overtime threshold is scoped per payroll week, so this still has to walk
+// week-by-week rather than treat the whole history as one span. The
+// still-in-progress current payroll week is always returned (tagged
+// `inProgress`) but excluded from the averages, same "don't let a partial
+// period drag the number down" rule used everywhere else in this app that
+// ticks with `now`.
 export function computeCapacityByHoursMix(panels, workHistory, clockLog, employees, { now = Date.now() } = {}) {
   const perBuildShipTs = new Map();
   workHistory
@@ -1419,16 +1434,18 @@ export function computeCapacityByHoursMix(panels, workHistory, clockLog, employe
     const key = dayKeyFor(c.clockedInAt);
     if (key) activeDayKeys.add(key);
   });
-  activeDayKeys.delete(dayKeyFor(now)); // today is still in progress — never a complete weekday
+  activeDayKeys.delete(dayKeyFor(now)); // today is still in progress — never a complete day
 
-  const weekdayActivityCount = new Map(); // payroll week key -> # distinct Mon-Fri days with real activity
+  // payroll week key -> # distinct days with real activity that week. Every
+  // day counts here, weekends included — per Pat's Oct 2 clarification,
+  // "the weekday doesn't matter" for this metric, unlike
+  // computeWeekdayCapacityReport's deliberately Mon-Fri-only denominator.
+  const activeDayCount = new Map();
   activeDayKeys.forEach((key) => {
     const ts = new Date(`${key}T12:00:00`).getTime(); // midday: safely inside the day regardless of local TZ
     if (Number.isNaN(ts)) return;
-    const dow = new Date(ts).getDay();
-    if (dow === 0 || dow === 6) return; // weekends don't count toward a "panels per weekday" denominator
     const wk = payrollWeekKey(new Date(ts));
-    weekdayActivityCount.set(wk, (weekdayActivityCount.get(wk) ?? 0) + 1);
+    activeDayCount.set(wk, (activeDayCount.get(wk) ?? 0) + 1);
   });
 
   const shippedByWeek = new Map();
@@ -1438,7 +1455,7 @@ export function computeCapacityByHoursMix(panels, workHistory, clockLog, employe
   });
 
   const currentWeekKey = payrollWeekKey(new Date(now));
-  const allWeekKeys = new Set([...shippedByWeek.keys(), ...weekdayActivityCount.keys()]);
+  const allWeekKeys = new Set([...shippedByWeek.keys(), ...activeDayCount.keys()]);
 
   const weeks = Array.from(allWeekKeys)
     .sort()
@@ -1456,7 +1473,7 @@ export function computeCapacityByHoursMix(panels, workHistory, clockLog, employe
       overtimeHours = Number(overtimeHours.toFixed(2));
       const totalHours = Number((regularHours + overtimeHours).toFixed(2));
       const shipped = shippedByWeek.get(wk) ?? 0;
-      const weekdaysActive = weekdayActivityCount.get(wk) ?? 0;
+      const daysActive = activeDayCount.get(wk) ?? 0;
       const panelsPerHour = totalHours > 0 ? shipped / totalHours : null;
       const regularAttributedPanels = panelsPerHour !== null ? panelsPerHour * regularHours : 0;
       const overtimeAttributedPanels = panelsPerHour !== null ? panelsPerHour * overtimeHours : 0;
@@ -1464,7 +1481,7 @@ export function computeCapacityByHoursMix(panels, workHistory, clockLog, employe
         weekOf: wk,
         inProgress: wk === currentWeekKey,
         shipped,
-        weekdaysActive,
+        daysActive,
         regularHours,
         overtimeHours,
         totalHours,
@@ -1473,17 +1490,17 @@ export function computeCapacityByHoursMix(panels, workHistory, clockLog, employe
       };
     });
 
-  const includedWeeks = weeks.filter((w) => !w.inProgress && w.weekdaysActive > 0);
-  const totalWeekdaysActive = includedWeeks.reduce((s, w) => s + w.weekdaysActive, 0);
+  const includedWeeks = weeks.filter((w) => !w.inProgress && w.daysActive > 0);
+  const totalDaysActive = includedWeeks.reduce((s, w) => s + w.daysActive, 0);
   const totalRegularAttributed = includedWeeks.reduce((s, w) => s + w.regularAttributedPanels, 0);
   const totalOvertimeAttributed = includedWeeks.reduce((s, w) => s + w.overtimeAttributedPanels, 0);
   const totalOvertimeHours = Number(includedWeeks.reduce((s, w) => s + w.overtimeHours, 0).toFixed(2));
 
   const avgPanelsPerDayAt40 =
-    totalWeekdaysActive > 0 ? Number((totalRegularAttributed / totalWeekdaysActive).toFixed(2)) : null;
+    totalDaysActive > 0 ? Number((totalRegularAttributed / totalDaysActive).toFixed(2)) : null;
   const avgPanelsPerDayWithOt =
-    totalWeekdaysActive > 0
-      ? Number(((totalRegularAttributed + totalOvertimeAttributed) / totalWeekdaysActive).toFixed(2))
+    totalDaysActive > 0
+      ? Number(((totalRegularAttributed + totalOvertimeAttributed) / totalDaysActive).toFixed(2))
       : null;
   const otContributionPerDay =
     avgPanelsPerDayAt40 !== null && avgPanelsPerDayWithOt !== null
@@ -1493,7 +1510,7 @@ export function computeCapacityByHoursMix(panels, workHistory, clockLog, employe
   return {
     weeks: weeks.slice().sort((a, b) => (a.weekOf < b.weekOf ? 1 : a.weekOf > b.weekOf ? -1 : 0)),
     weeksIncluded: includedWeeks.length,
-    totalWeekdaysActive,
+    totalDaysActive,
     totalOvertimeHours,
     avgPanelsPerDayAt40,
     avgPanelsPerDayWithOt,
@@ -2008,14 +2025,13 @@ export function computeProfitAndLossTrend(panels, workHistory, clockLog, employe
 // september because the site wasnt fully up and running." The shop's very
 // first logged session was 2026-08-31 (a Monday), which only gives the
 // payroll week of 2026-08-26 two real days on file — clearly a stub, not a
-// real week. The payroll week right after that (2026-09-02) already shows
-// normal-looking volume in the live data, but it's still the calendar
-// "first week of September" Pat is calling out as not representative, so
-// tracking starts at the payroll week AFTER that one. This is a single
-// named constant specifically so it's a one-line change if this cutoff
-// needs to move once there's a clearer sense of exactly when the site was
-// "fully up and running."
-export const MARGIN_TRACKING_START_DATE = "2026-09-09";
+// real week. This constant originally started at the very next payroll
+// week (2026-09-09), but Pat then asked directly to also take that week
+// (Sep 9-15) out — she was still looking at it as ramp-up, regardless of
+// its raw activity volume — so tracking now starts the week after that:
+// 2026-09-16. This is a single named constant specifically so it's a
+// one-line change if this cutoff needs to move again.
+export const MARGIN_TRACKING_START_DATE = "2026-09-16";
 
 // A live, cumulative profit-margin figure for the top of the ProfitAndLoss
 // page — Pat's request: "i need to have a live profit margin percentage at
@@ -2062,6 +2078,75 @@ export function computeLiveProfitMargin(panels, workHistory, clockLog, employees
     weeksCounted,
     trackingStart: trackingStartMs,
   };
+}
+
+// Day-by-day series of the SAME cumulative figure computeLiveProfitMargin
+// reports as one number — Pat: "i think it would look cool to also have a
+// live chart like a stock on the nyse. something like a robinhood setup."
+// Each point is "what the overall margin would have read if you'd looked
+// on that day," so the final (today's) point always matches
+// computeLiveProfitMargin's own output exactly, and the line as a whole
+// shows how that number has actually moved since tracking started — the
+// same "goes up and down" idea, now as a chart instead of a single number.
+//
+// Cost math has to stay week-scoped even though this returns daily points:
+// overtime resets every payroll week (the first 40 clocked hours are
+// regular, the rest 1.5x — computeOvertimePay), so summing cost over a
+// multi-week span in one shot would apply that 40-hour threshold ONCE
+// across the whole span instead of once per week, wildly undercounting
+// overtime. So every already-COMPLETE week between trackingStart and the
+// day being plotted is summed via its own real [start, end) range (exactly
+// like computeLiveProfitMargin does), and only the week the plotted day
+// actually falls in is computed with its range truncated to just through
+// that day — a legitimate "this week so far" figure, not an approximation.
+export function computeLiveProfitMarginHistory(panels, workHistory, clockLog, employees, { trackingStart = MARGIN_TRACKING_START_DATE, now = Date.now() } = {}) {
+  const trackingStartMs = payrollWeekStart(new Date(`${trackingStart}T00:00:00`)).getTime();
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const todayMs = today.getTime();
+
+  if (trackingStartMs > now) return [];
+
+  const points = [];
+  let cumRevenue = 0;
+  let cumPayrollCost = 0;
+  let rolledThroughWeekStart = trackingStartMs;
+
+  for (let dayMs = trackingStartMs; dayMs <= todayMs; dayMs += 86400000) {
+    const dayEndMs = dayMs + 86400000;
+    const dayWeekStart = payrollWeekStart(new Date(dayMs)).getTime();
+
+    // Fold in any full weeks that finished before this day's own week.
+    while (rolledThroughWeekStart < dayWeekStart) {
+      const { start, end } = payrollWeekRange(new Date(rolledThroughWeekStart));
+      const wkPnl = computeWeeklyProfitAndLoss(panels, workHistory, clockLog, employees, start, end, { now });
+      cumRevenue += wkPnl.revenue;
+      cumPayrollCost += wkPnl.payrollCost;
+      rolledThroughWeekStart += 7 * 86400000;
+    }
+
+    // This day's own week, truncated to just through the end of today's
+    // plotted day — so a day partway through a still-open week shows that
+    // week's progress so far, not the week's eventual final total.
+    const partial = computeWeeklyProfitAndLoss(panels, workHistory, clockLog, employees, dayWeekStart, dayEndMs, { now: Math.min(now, dayEndMs) });
+
+    const revenue = Number((cumRevenue + partial.revenue).toFixed(2));
+    const payrollCost = Number((cumPayrollCost + partial.payrollCost).toFixed(2));
+    const profit = Number((revenue - payrollCost).toFixed(2));
+    const d = new Date(dayMs);
+
+    points.push({
+      date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
+      dateMs: dayMs,
+      revenue,
+      payrollCost,
+      profit,
+      marginPct: revenue > 0 ? Math.round((profit / revenue) * 100) : null,
+      isToday: dayMs === todayMs,
+    });
+  }
+
+  return points;
 }
 
 // Multi-week version of pnlWithDrivers, for the ProfitAndLoss page's
