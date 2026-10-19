@@ -28,7 +28,7 @@ const TONE_ACCENT = {
 export default function EmployeeDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { employees, roleDefaults, workHistory, panels, clockLog, updateEmployee } = useApp();
+  const { employees, roleDefaults, workHistory, panels, clockLog, updateEmployee, reinstateEmployee } = useApp();
 
   const employee = employees.find((e) => e.id === id);
   const [editingEntry, setEditingEntry] = useState(null);
@@ -189,7 +189,14 @@ export default function EmployeeDetail() {
         <div className="flex items-center gap-4">
           <Avatar employee={employee} sizeClass="w-14 h-14 text-lg" />
           <div>
-            <h1 className="text-xl font-bold text-ink-900">{employee.name}</h1>
+            <h1 className="text-xl font-bold text-ink-900">
+              {employee.name}
+              {employee.terminatedAt && (
+                <span className="ml-2 align-middle text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 bg-bad-50 text-bad-600">
+                  Terminated
+                </span>
+              )}
+            </h1>
             <div className="flex items-center gap-2 mt-1">
               <RoleBadge role={employee.role} />
               <span className="text-xs text-ink-500">
@@ -215,6 +222,20 @@ export default function EmployeeDetail() {
           Edit Profile
         </Button>
       </div>
+
+      {employee.terminatedAt && (
+        <div className="flex items-center justify-between gap-3 flex-wrap rounded-lg border border-bad-500/30 bg-bad-50 px-4 py-3 mb-5">
+          <p className="text-[12px] text-bad-600">
+            Terminated on{" "}
+            {new Date(employee.terminatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+            . Can't log in or clock in. All hours, pay and work history below stay on record and still count in payroll
+            and P&L for the weeks they worked.
+          </p>
+          <Button variant="ghost" onClick={() => reinstateEmployee(employee.id)}>
+            Reinstate
+          </Button>
+        </div>
+      )}
 
       <Tabs tabs={TABS} active={activeTab} onChange={setActiveTab} />
 

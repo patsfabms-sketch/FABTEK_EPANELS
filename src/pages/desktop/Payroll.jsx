@@ -42,8 +42,15 @@ export default function Payroll() {
   );
   const isCurrentWeek = payrollWeekStart(refDate).getTime() === payrollWeekStart(new Date(now)).getTime();
 
+  // Terminated employees stay in the math (their past pay is real cost), but
+  // only show up as a row for a week they actually have hours in — otherwise
+  // every future week would list them at 0 hrs. Totals are unaffected: a
+  // terminated person with no hours in the range contributes $0 anyway.
   const rows = useMemo(
-    () => computePayrollSummary(clockLog, employees, start, end, { now }),
+    () =>
+      computePayrollSummary(clockLog, employees, start, end, { now }).filter(
+        (r) => !r.employee.terminatedAt || r.totalHours > 0
+      ),
     [clockLog, employees, start, end, now]
   );
 
@@ -139,6 +146,9 @@ export default function Payroll() {
                   <td className="px-4 py-2.5 font-medium text-ink-900 flex items-center gap-2.5">
                     <Avatar employee={r.employee} />
                     {r.employee.name}
+                    {r.employee.terminatedAt && (
+                      <span className="ml-2 text-[10px] text-bad-600 uppercase tracking-wide">Terminated</span>
+                    )}
                   </td>
                   <td className="px-4 py-2.5"><RoleBadge role={r.employee.role} /></td>
                   <td className="px-4 py-2.5 text-ink-600">${r.employee.payRate?.toFixed(2)}/hr</td>

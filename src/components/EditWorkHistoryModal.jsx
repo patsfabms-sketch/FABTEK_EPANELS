@@ -246,7 +246,7 @@ export default function EditWorkHistoryModal({ entry, employeeName, onClose }) {
             <option value="">Not recorded</option>
             {employees.map((e) => (
               <option key={e.id} value={e.id}>
-                {e.name}
+                {e.name}{e.terminatedAt ? " (terminated)" : ""}
               </option>
             ))}
             <option value={UNKNOWN_ATTRIBUTION}>Unknown / not one person's error</option>

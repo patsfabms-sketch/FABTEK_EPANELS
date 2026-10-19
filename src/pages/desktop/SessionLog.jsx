@@ -154,7 +154,7 @@ export default function SessionLog() {
           <option value="All Employees">All Employees</option>
           {employees.map((e) => (
             <option key={e.id} value={e.id}>
-              {e.name}
+              {e.name}{e.terminatedAt ? " (terminated)" : ""}
             </option>
           ))}
         </select>

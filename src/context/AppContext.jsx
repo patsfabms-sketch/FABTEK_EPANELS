@@ -64,12 +64,19 @@ function fromDbEmployee(row) {
     photoPath: row.photo_path ?? null,
     phone: row.phone ?? "",
     email: row.email ?? "",
+    // ms timestamp when a manager terminated this person, or null if they're
+    // active. A terminated employee STAYS in the `employees` list (so every
+    // historical payroll/P&L/capacity calculation keeps counting their past
+    // hours and pay exactly as before) — they're just blocked from logging
+    // in/clocking in and hidden from live-roster views via `activeEmployees`.
+    terminatedAt: row.terminated_at ? new Date(row.terminated_at).getTime() : null,
   };
 }
 const EMPLOYEE_FIELD_MAP = {
   payRate: "pay_rate",
   currentWeekAvg: "current_week_avg",
   photoPath: "photo_path",
+  terminatedAt: "terminated_at",
 };
 function toDbEmployeeInsert(emp) {
   return {
@@ -685,6 +692,62 @@ export function AppProvider({ children }) {
     supabase.from("assemblyos_employees").update(toDbEmployeeFields(fields)).eq("id", employeeId).then(reportResult);
   }
 
+  // Terminates someone WITHOUT removing them: they keep their row in
+  // `employees` (pay rate and all), so every past week's payroll, P&L,
+  // capacity and per-person history reads exactly as it did the day before —
+  // nothing is recalculated or dropped. What changes is only the future:
+  // login/PIN setup is blocked server-side (assemblyos_login RPC) and here,
+  // any live panel session is ended (discarded — nothing new logged), and
+  // an open clock-in is closed at the moment of termination so it can't keep
+  // accruing paid hours forever. They drop out of the live-roster views via
+  // `activeEmployees` and show in a Terminated section on the Team page,
+  // where their full profile/work history stays one click away.
+  function terminateEmployee(employeeId) {
+    const emp = employees.find((e) => e.id === employeeId);
+    if (!emp || emp.terminatedAt) return;
+    const nowMs = Date.now();
+    setEmployees((prev) => prev.map((e) => (e.id === employeeId ? { ...e, terminatedAt: nowMs } : e)));
+    supabase
+      .from("assemblyos_employees")
+      .update({ terminated_at: new Date(nowMs).toISOString() })
+      .eq("id", employeeId)
+      .then(reportResult);
+
+    activeSessions.filter((s) => s.employeeId === employeeId).forEach((s) => finalizeActiveSession(s, { discard: true }));
+
+    const openEntry = clockLog.find((c) => c.employeeId === employeeId && !c.clockedOutAt);
+    if (openEntry) {
+      const grossHours = Number(((nowMs - openEntry.clockedInAt) / 3600000).toFixed(2));
+      setClockLog((prev) =>
+        prev.map((c) => (c.id === openEntry.id ? { ...c, clockedOutAt: nowMs, hours: grossHours } : c))
+      );
+      supabase
+        .from("assemblyos_clock_log")
+        .update({ clocked_out_at: new Date(nowMs).toISOString(), hours: grossHours })
+        .eq("id", openEntry.id)
+        .then(reportResult);
+    }
+
+    setPendingOverrides((prev) => {
+      if (!(employeeId in prev)) return prev;
+      const next = { ...prev };
+      delete next[employeeId];
+      return next;
+    });
+    if (currentUserId === employeeId) setCurrentUserId(null);
+    logActivity(`terminated ${emp.name}`, `@${emp.username}`, { kind: "verify" });
+  }
+
+  // Undoes terminateEmployee — e.g. a rehire or a mistaken click. Their
+  // existing username/PIN work again immediately.
+  function reinstateEmployee(employeeId) {
+    const emp = employees.find((e) => e.id === employeeId);
+    if (!emp || !emp.terminatedAt) return;
+    setEmployees((prev) => prev.map((e) => (e.id === employeeId ? { ...e, terminatedAt: null } : e)));
+    supabase.from("assemblyos_employees").update({ terminated_at: null }).eq("id", employeeId).then(reportResult);
+    logActivity(`reinstated ${emp.name}`, `@${emp.username}`);
+  }
+
   // Removes someone from the roster. Their past workHistory/activityFeed
   // entries are left as-is (already rendered with a `?.` fallback to
   // "Unknown Technician" wherever an employee is looked up by id) rather
@@ -1173,6 +1236,9 @@ export function AppProvider({ children }) {
       return { ok: false, error: "This clock sheet is from a previous week — ask your manager for this week's printout." };
     }
     if (!currentUserId) return { ok: false, error: "You're not signed in." };
+    if (employees.find((e) => e.id === currentUserId)?.terminatedAt) {
+      return { ok: false, error: "This account has been deactivated. See your manager." };
+    }
 
     const now = Date.now();
     const openEntry = clockLog.find((c) => c.employeeId === currentUserId && !c.clockedOutAt);
@@ -1323,7 +1389,20 @@ export function AppProvider({ children }) {
     [employees, pendingOverrides, roleDefaults]
   );
 
-  const currentUser = employeesWithAttainment.find((e) => e.id === currentUserId) ?? null;
+  // Everyone not terminated — use this for anything that's about who's on
+  // the floor NOW (roster, clock status, assignment dropdowns, daily-goal
+  // totals). `employees` stays the full list, terminated included, so
+  // history-based math is unchanged.
+  const activeEmployees = useMemo(
+    () => employeesWithAttainment.filter((e) => !e.terminatedAt),
+    [employeesWithAttainment]
+  );
+
+  // A terminated person is treated as signed out even if their phone still
+  // has a saved session — the realtime employee update lands here and
+  // bounces them to the login screen.
+  const foundUser = employeesWithAttainment.find((e) => e.id === currentUserId) ?? null;
+  const currentUser = foundUser && !foundUser.terminatedAt ? foundUser : null;
   const currentAdmin = admins.find((a) => a.id === currentAdminId) ?? null;
 
   // ---- Mobile work session actions ---------------------------------------------
@@ -1500,6 +1579,7 @@ export function AppProvider({ children }) {
     retryConnection,
     roleDefaults,
     employees: employeesWithAttainment,
+    activeEmployees,
     pendingOverrides,
     hasPendingChanges,
     activityFeed,
@@ -1524,6 +1604,8 @@ export function AppProvider({ children }) {
     resetOverride,
     addEmployee,
     updateEmployee,
+    terminateEmployee,
+    reinstateEmployee,
     deleteEmployee,
     addAdmin,
     setPricePerConnection,

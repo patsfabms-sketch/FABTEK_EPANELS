@@ -18,7 +18,19 @@ import { Card, SectionTitle, StatCard, RoleBadge, Button, Modal, Avatar, MaskedV
 import EditTeamMemberModal from "../../components/EditTeamMemberModal";
 
 export default function Team() {
-  const { employees, admins, workHistory, clockLog, addEmployee, updateEmployee, deleteEmployee, addAdmin } = useApp();
+  const {
+    activeEmployees: employees,
+    employees: allEmployees,
+    admins,
+    workHistory,
+    clockLog,
+    addEmployee,
+    updateEmployee,
+    terminateEmployee,
+    reinstateEmployee,
+    deleteEmployee,
+    addAdmin,
+  } = useApp();
   const navigate = useNavigate();
   const [showClockQr, setShowClockQr] = useState(false);
   const [query, setQuery] = useState("");
@@ -28,6 +40,7 @@ export default function Team() {
   const [showAddAdminForm, setShowAddAdminForm] = useState(false);
   const [newCredentials, setNewCredentials] = useState(null);
   const [editingEmployee, setEditingEmployee] = useState(null);
+  const [terminatingEmployee, setTerminatingEmployee] = useState(null);
   const [deletingEmployee, setDeletingEmployee] = useState(null);
 
   // Ticks so "Hrs Clocked In (This Week)" keeps moving for anyone still
@@ -89,6 +102,17 @@ export default function Team() {
       atCapacity,
     };
   }, [withHours]);
+
+  // Terminated people: not in any live-roster number above (capacity, role
+  // counts, search), but listed here so their profile and full work history
+  // stay one click away.
+  const terminated = useMemo(
+    () =>
+      allEmployees
+        .filter((e) => e.terminatedAt)
+        .sort((a, b) => b.terminatedAt - a.terminatedAt),
+    [allEmployees]
+  );
 
   const roleCounts = useMemo(() => {
     const counts = {};
@@ -235,11 +259,11 @@ export default function Team() {
                     <button
                       onClick={(ev) => {
                         ev.stopPropagation();
-                        setDeletingEmployee(e);
+                        setTerminatingEmployee(e);
                       }}
                       className="text-[12px] font-semibold text-bad-600 hover:text-bad-700"
                     >
-                      Delete
+                      Terminate
                     </button>
                   </div>
                 </td>
@@ -248,6 +272,76 @@ export default function Team() {
           </tbody>
         </table>
       </Card>
+
+      {terminated.length > 0 && (
+        <div className="mt-8">
+          <SectionTitle
+            title={`Terminated (${terminated.length})`}
+            subtitle="No longer able to log in or clock in. Their hours, pay and work history stay on record and keep counting in past payroll and P&L — click a name to review."
+          />
+          <Card padded={false} className="overflow-x-auto">
+            <table className="w-full text-[13px]">
+              <thead>
+                <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
+                  <th className="px-4 py-3 font-semibold">Employee</th>
+                  <th className="px-4 py-3 font-semibold">Role</th>
+                  <th className="px-4 py-3 font-semibold">Terminated</th>
+                  <th className="px-4 py-3 font-semibold">Sessions on Record</th>
+                  <th className="px-4 py-3 font-semibold text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {terminated.map((e, i) => {
+                  const sessions = workHistory.filter((h) => h.employeeId === e.id).length;
+                  return (
+                    <tr
+                      key={e.id}
+                      onClick={() => navigate(`/team/${e.id}`)}
+                      className={`cursor-pointer hover:bg-brand-50/40 border-b border-paper-100 last:border-0 ${
+                        i % 2 === 1 ? "bg-paper-50/60" : ""
+                      }`}
+                    >
+                      <td className="px-4 py-2.5 font-medium text-ink-700 flex items-center gap-2.5">
+                        <Avatar employee={e} />
+                        {e.name}
+                      </td>
+                      <td className="px-4 py-2.5"><RoleBadge role={e.role} /></td>
+                      <td className="px-4 py-2.5 text-ink-600">
+                        {new Date(e.terminatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                      </td>
+                      <td className="px-4 py-2.5 text-ink-600">{sessions}</td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center justify-end gap-3">
+                          <button
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              reinstateEmployee(e.id);
+                            }}
+                            className="text-[12px] font-semibold text-brand-600 hover:text-brand-700"
+                          >
+                            Reinstate
+                          </button>
+                          {sessions === 0 && (
+                            <button
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                setDeletingEmployee(e);
+                              }}
+                              className="text-[12px] font-semibold text-bad-600 hover:text-bad-700"
+                            >
+                              Delete
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Card>
+        </div>
+      )}
 
       <div className="flex items-center justify-between mt-8 mb-4">
         <SectionTitle
@@ -325,6 +419,17 @@ export default function Team() {
           onSave={(fields) => {
             updateEmployee(editingEmployee.id, fields);
             setEditingEmployee(null);
+          }}
+        />
+      )}
+
+      {terminatingEmployee && (
+        <TerminateEmployeeModal
+          employee={terminatingEmployee}
+          onClose={() => setTerminatingEmployee(null)}
+          onConfirm={() => {
+            terminateEmployee(terminatingEmployee.id);
+            setTerminatingEmployee(null);
           }}
         />
       )}
@@ -567,6 +672,33 @@ function AddTeamMemberModal({ onClose, onCreate }) {
         </Button>
       </div>
     </div>
+  );
+}
+
+function TerminateEmployeeModal({ employee, onClose, onConfirm }) {
+  return (
+    <Modal onClose={onClose} widthClass="max-w-[380px]">
+      <h3 className="text-sm font-semibold text-ink-900 mb-2">Terminate {employee.name}?</h3>
+      <p className="text-[12px] text-ink-500 mb-2">
+        They won't be able to log in or clock in as @{employee.username} anymore, and they'll come off the active
+        roster. If they're clocked in right now they'll be clocked out, and any panel they're scanned into will be
+        ended.
+      </p>
+      <p className="text-[12px] text-ink-500 mb-2">
+        Nothing else changes: their hours, pay, and work history stay on record and keep counting in past payroll,
+        P&L and capacity numbers exactly as before. You can find them under Terminated on this page.
+      </p>
+      <p className="text-[11px] text-ink-400 mb-5">You can reinstate them at any time.</p>
+
+      <div className="flex justify-end gap-2">
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button variant="danger" onClick={onConfirm}>
+          Terminate
+        </Button>
+      </div>
+    </Modal>
   );
 }
 

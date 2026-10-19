@@ -43,7 +43,7 @@ const STATUS_META = {
 };
 
 export default function FloorStatus() {
-  const { employees, activeSessions, clockLog, panels } = useApp();
+  const { activeEmployees: employees, activeSessions, clockLog, panels } = useApp();
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");

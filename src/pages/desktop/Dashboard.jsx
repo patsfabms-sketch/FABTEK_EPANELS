@@ -13,22 +13,22 @@ const KIND_ICON = {
 };
 
 export default function Dashboard() {
-  const { employees, activityFeed, activeSessions, workHistory, clockLog, panels } = useApp();
+  const { employees, activeEmployees, activityFeed, activeSessions, workHistory, clockLog, panels } = useApp();
   const [showClockModal, setShowClockModal] = useState(false);
   const [showThroughputModal, setShowThroughputModal] = useState(false);
 
   const employeeById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
 
   const stats = useMemo(() => {
-    const totalHours = employees.reduce((sum, e) => sum + e.currentWeekAvg, 0);
+    const totalHours = activeEmployees.reduce((sum, e) => sum + e.currentWeekAvg, 0);
     const todayLabel = new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
     return {
       panelsInProgress: new Set(activeSessions.map((s) => s.panel)).size,
       completedToday: workHistory.filter((h) => h.date === todayLabel && h.taskCompleted).length,
       totalHoursWeekly: Math.round(totalHours * 7),
-      activeEmployees: employees.length,
+      activeEmployees: activeEmployees.length,
     };
-  }, [employees, activeSessions, workHistory]);
+  }, [activeEmployees, activeSessions, workHistory]);
 
   // Same signal Team.jsx's per-row "Clock Status" badge already reads
   // (assemblyos_clock_log via AppContext.clockLog, an open row = still
@@ -36,12 +36,12 @@ export default function Dashboard() {
   // "how many are actually here right now" number for the dashboard,
   // with the same live update-as-people-scan behavior.
   const clockedInEmployees = useMemo(
-    () => employees.filter((e) => isClockedIn(clockLog, e.id)),
-    [employees, clockLog]
+    () => activeEmployees.filter((e) => isClockedIn(clockLog, e.id)),
+    [activeEmployees, clockLog]
   );
   const notClockedInEmployees = useMemo(
-    () => employees.filter((e) => !isClockedIn(clockLog, e.id)),
-    [employees, clockLog]
+    () => activeEmployees.filter((e) => !isClockedIn(clockLog, e.id)),
+    [activeEmployees, clockLog]
   );
 
   // Pat's request (Sept 23): "i want the panels per day should be at the
@@ -116,7 +116,7 @@ export default function Dashboard() {
           <p className="text-xs font-medium text-ink-500">Clocked In</p>
           <p className="text-2xl font-bold mt-1 text-good-600">
             {clockedInEmployees.length}
-            <span className="text-ink-400 text-base font-semibold"> / {employees.length}</span>
+            <span className="text-ink-400 text-base font-semibold"> / {activeEmployees.length}</span>
           </p>
           <p className="text-[11px] text-brand-600 font-semibold mt-1">On the shop's Clock QR — see who →</p>
         </Card>

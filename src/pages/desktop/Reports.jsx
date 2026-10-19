@@ -43,7 +43,7 @@ const RANGE_OPTIONS = [
 const ROLE_FILTERS = ["All Roles", ...Object.values(ROLES)];
 
 export default function Reports() {
-  const { employees, roleDefaults, workHistory, panels, clockLog, activeSessions } = useApp();
+  const { employees, activeEmployees, roleDefaults, workHistory, panels, clockLog, activeSessions } = useApp();
   const [range, setRange] = useState(RANGE_OPTIONS[1]);
   const [roleFilter, setRoleFilter] = useState("All Roles");
   const [employeeFilter, setEmployeeFilter] = useState("All Employees");
@@ -88,8 +88,8 @@ export default function Reports() {
 
   const chartDays = range.days ?? 90;
   const dailyTarget = useMemo(
-    () => employees.reduce((sum, e) => sum + (e.override ?? roleDefaults[e.role].daily), 0),
-    [employees, roleDefaults]
+    () => activeEmployees.reduce((sum, e) => sum + (e.override ?? roleDefaults[e.role].daily), 0),
+    [activeEmployees, roleDefaults]
   );
   const hoursTrend = useMemo(
     () => computeDailyHoursTrend(filteredHistory, chartDays, dailyTarget),
@@ -310,7 +310,7 @@ export default function Reports() {
         >
           <option>All Employees</option>
           {employees.map((e) => (
-            <option key={e.id}>{e.name}</option>
+            <option key={e.id} value={e.name}>{e.name}{e.terminatedAt ? " (terminated)" : ""}</option>
           ))}
         </select>
       </div>

@@ -279,7 +279,7 @@ export default function ActiveSession() {
                   </option>
                   {employees.map((e) => (
                     <option key={e.id} value={e.id}>
-                      {e.name}
+                      {e.name}{e.terminatedAt ? " (terminated)" : ""}
                     </option>
                   ))}
                 </select>
