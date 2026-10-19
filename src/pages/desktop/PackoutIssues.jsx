@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useApp } from "../../context/AppContext";
 import { computePackoutIssues } from "../../data/mockData";
-import { Card, SectionTitle, StatCard, Button, formatDateTime } from "../../components/ui";
+import { Card, SectionTitle, StatCard, Button, Modal, formatDateTime } from "../../components/ui";
 
 // Packout Issues — Pat's request: Cierra (Lead Panel Technician) verifies
 // every incoming kit against its parts list before a build starts, and when
@@ -21,7 +21,8 @@ import { Card, SectionTitle, StatCard, Button, formatDateTime } from "../../comp
 // out, with a required description whenever the answer is no. That
 // structured answer, not free-text notes, is what this page tracks.
 export default function PackoutIssues() {
-  const { panels, workHistory, employees } = useApp();
+  const { panels, workHistory, employees, setPackoutIssueStatus } = useApp();
+  const [editingIssue, setEditingIssue] = useState(null);
   const [search, setSearch] = useState("");
   const [showAll, setShowAll] = useState(false);
 
@@ -43,10 +44,9 @@ export default function PackoutIssues() {
     const total = resolvedIssues.reduce((s, i) => s + i.daysOpen, 0);
     return Number((total / resolvedIssues.length).toFixed(1));
   }, [resolvedIssues]);
-  const resolvedLast30 = useMemo(() => {
-    const cutoff = now - 30 * 86400000;
-    return resolvedIssues.filter((i) => i.resolvedAt && new Date(i.resolvedAt).getTime() >= cutoff).length;
-  }, [resolvedIssues, now]);
+  const receivedCount = useMemo(() => issues.filter((i) => i.resolutionType === "received").length, [issues]);
+  const shippedWithoutCount = useMemo(() => issues.filter((i) => i.resolutionType === "shipped_without").length, [issues]);
+  const reverifiedCount = useMemo(() => issues.filter((i) => i.resolutionType === "reverified").length, [issues]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -88,13 +88,23 @@ export default function PackoutIssues() {
           sub="Still missing something"
           accent={openIssues.length > 0 ? "text-bad-600" : "text-ink-900"}
         />
-        <StatCard label="Resolved (Last 30 Days)" value={resolvedLast30} sub="Parts arrived / verification finished" />
+        <StatCard label="Part Received" value={receivedCount} sub="Missing part arrived" accent={receivedCount > 0 ? "text-good-600" : "text-ink-900"} />
+        <StatCard
+          label="Shipped Without Part"
+          value={shippedWithoutCount}
+          sub="Panel went out missing it"
+          accent={shippedWithoutCount > 0 ? "text-warn-600" : "text-ink-900"}
+        />
         <StatCard
           label="Avg Days to Resolve"
           value={avgDaysToResolve !== null ? avgDaysToResolve : "—"}
           sub={resolvedIssues.length ? `across ${resolvedIssues.length} resolved issue${resolvedIssues.length === 1 ? "" : "s"}` : "no resolved issues yet"}
         />
-        <StatCard label="Total Reported" value={issues.length} sub="Since this report started tracking" />
+        <StatCard
+          label="Total Reported"
+          value={issues.length}
+          sub={reverifiedCount > 0 ? `${reverifiedCount} closed by a clean re-check` : "Since this report started tracking"}
+        />
       </div>
 
       <div className="flex flex-wrap gap-3 mb-4 print:hidden">
@@ -133,6 +143,7 @@ export default function PackoutIssues() {
                 <th className="px-4 py-3 font-semibold">What's Missing</th>
                 <th className="px-4 py-3 font-semibold">Reported By</th>
                 <th className="px-4 py-3 font-semibold">Status</th>
+                <th className="px-4 py-3 font-semibold text-right print:hidden">Update</th>
               </tr>
             </thead>
             <tbody>
@@ -154,12 +165,17 @@ export default function PackoutIssues() {
                   <td className="px-4 py-2.5">
                     {i.resolved ? (
                       <span className="inline-flex flex-col">
-                        <span className="text-[10px] font-semibold rounded-full px-2 py-0.5 bg-good-50 text-good-600 w-fit">
-                          Resolved
+                        <span
+                          className={`text-[10px] font-semibold rounded-full px-2 py-0.5 w-fit ${
+                            i.resolutionType === "shipped_without" ? "bg-warn-50 text-warn-600" : "bg-good-50 text-good-600"
+                          }`}
+                        >
+                          {STATUS_LABEL[i.resolutionType] ?? "Resolved"}
                         </span>
                         <span className="text-[10px] text-ink-400 mt-1">
                           after {i.daysOpen} day{i.daysOpen === 1 ? "" : "s"} · {formatDateTime(i.resolvedAt)}
                         </span>
+                        {i.resolutionNote && <span className="text-[11px] text-ink-600 mt-1 max-w-[220px]">{i.resolutionNote}</span>}
                       </span>
                     ) : (
                       <span className="inline-flex flex-col">
@@ -172,12 +188,32 @@ export default function PackoutIssues() {
                       </span>
                     )}
                   </td>
+                  <td className="px-4 py-2.5 text-right print:hidden">
+                    <button
+                      onClick={() => setEditingIssue(i)}
+                      className="text-[12px] font-semibold text-brand-600 hover:text-brand-700 whitespace-nowrap"
+                    >
+                      {i.resolved ? "Change Status" : "Update Status"}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </Card>
+
+      {editingIssue && (
+        <UpdateStatusModal
+          issue={editingIssue}
+          siblings={openIssues.filter((o) => o.buildId === editingIssue.buildId && o.id !== editingIssue.id)}
+          onClose={() => setEditingIssue(null)}
+          onSave={(ids, payload) => {
+            setPackoutIssueStatus(ids, payload);
+            setEditingIssue(null);
+          }}
+        />
+      )}
 
       <SectionTitle title="Methodology" />
       <Card className="text-[12px] text-ink-600 leading-relaxed space-y-2">
@@ -189,10 +225,18 @@ export default function PackoutIssues() {
           required answer captured on every packout check going forward, not a note that can be skipped or lost.
         </p>
         <p>
-          <strong className="text-ink-900">An issue counts as resolved</strong> once a later packout check on the
-          same panel either reports nothing missing, or verification is finished — whichever happens first. "Days
-          open" for a resolved issue is the real time between the report and that resolution; for a still-open issue,
-          it's the time since it was reported.
+          <strong className="text-ink-900">Status is set by a person.</strong> From the Update column an admin marks
+          each issue <em>Part Received</em> (the missing part arrived) or <em>Shipped Without Part</em> (the panel
+          went out without it), with the date it happened and an optional note — a real record of what actually
+          occurred, not a guess. Either one closes the issue; an issue can be reopened at any time. A panel that
+          shipped without a part stays counted as an issue that was reported, so it still shows up as evidence of a
+          short kit.
+        </p>
+        <p>
+          <strong className="text-ink-900">An issue with no manual status can still close itself</strong> if a later
+          packout check on the same panel reports nothing missing, or verification is finished (shown as "Re-verified
+          complete"). A manual status always takes precedence. "Days open" is the real time between the report and
+          whichever resolution applies; for a still-open issue, it's the time since it was reported.
         </p>
         <p>
           <strong className="text-ink-900">Data starts from when this feature deployed, not earlier.</strong> The
@@ -203,5 +247,149 @@ export default function PackoutIssues() {
         </p>
       </Card>
     </div>
+  );
+}
+
+const STATUS_LABEL = {
+  received: "Part Received",
+  shipped_without: "Shipped Without Part",
+  reverified: "Re-verified complete",
+};
+
+function localDateString(d = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// A date-only pick becomes a real timestamp: "right now" if it's today (so
+// days-open stays precise), otherwise noon local on the chosen day — safely
+// inside the day regardless of timezone.
+function dateToIso(dateStr) {
+  if (dateStr === localDateString()) return new Date().toISOString();
+  return new Date(`${dateStr}T12:00:00`).toISOString();
+}
+
+function UpdateStatusModal({ issue, siblings, onClose, onSave }) {
+  const [choice, setChoice] = useState(issue.isManual ? issue.resolutionType : "");
+  const [date, setDate] = useState(() =>
+    issue.isManual && issue.resolvedAt ? localDateString(new Date(issue.resolvedAt)) : localDateString()
+  );
+  const [note, setNote] = useState(issue.resolutionNote || "");
+  const [applyToSiblings, setApplyToSiblings] = useState(true);
+  const [error, setError] = useState("");
+
+  const minDate = localDateString(new Date(issue.reportedAt));
+  const maxDate = localDateString();
+
+  function handleSave() {
+    if (!choice) {
+      setError("Pick what happened: part received, or shipped without it.");
+      return;
+    }
+    if (!date || date < minDate || date > maxDate) {
+      setError("Pick a date between when it was reported and today.");
+      return;
+    }
+    const ids = [issue.id, ...(applyToSiblings && !issue.isManual ? siblings.map((s) => s.id) : [])];
+    onSave(ids, { resolution: choice, resolvedAt: dateToIso(date), note });
+  }
+
+  const options = [
+    { key: "received", title: "Part received", desc: "The missing part arrived and was added." },
+    { key: "shipped_without", title: "Shipped without the part", desc: "The panel went out without it." },
+  ];
+
+  return (
+    <Modal onClose={onClose} widthClass="max-w-[440px]">
+      <h3 className="text-sm font-semibold text-ink-900 mb-1">
+        Update status — {issue.panelTag}
+        {issue.jobNumber && <span className="text-ink-400 font-normal"> · Job #{issue.jobNumber}</span>}
+      </h3>
+      <p className="text-[12px] text-ink-500 mb-4">
+        Missing: <span className="text-ink-700">{issue.missingDescription || "(no description)"}</span>
+      </p>
+
+      <div className="space-y-2 mb-4">
+        {options.map((o) => (
+          <button
+            key={o.key}
+            type="button"
+            onClick={() => {
+              setChoice(o.key);
+              setError("");
+            }}
+            className={`w-full text-left rounded-lg border px-3 py-2.5 ${
+              choice === o.key
+                ? o.key === "received"
+                  ? "border-good-500 bg-good-50"
+                  : "border-warn-500 bg-warn-50"
+                : "border-paper-200 bg-white hover:bg-paper-50"
+            }`}
+          >
+            <p className="text-[13px] font-semibold text-ink-900">{o.title}</p>
+            <p className="text-[11px] text-ink-500">{o.desc}</p>
+          </button>
+        ))}
+      </div>
+
+      <label className="block text-[11px] font-semibold text-ink-700 mb-1">When did this happen?</label>
+      <input
+        type="date"
+        value={date}
+        min={minDate}
+        max={maxDate}
+        onChange={(e) => {
+          setDate(e.target.value);
+          setError("");
+        }}
+        className="rounded-lg border border-paper-200 bg-white px-3 py-2 text-[13px] text-ink-700 mb-3"
+      />
+
+      <label className="block text-[11px] font-semibold text-ink-700 mb-1">Note (optional)</label>
+      <textarea
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        rows={2}
+        placeholder="e.g. Siemens sent the relay on 10/22, or approved shipping without the knife switch"
+        className="w-full rounded-lg border border-paper-200 bg-white px-3 py-2 text-[13px] text-ink-700 mb-3"
+      />
+
+      {!issue.isManual && siblings.length > 0 && (
+        <label className="flex items-start gap-2 text-[12px] text-ink-600 mb-3">
+          <input
+            type="checkbox"
+            checked={applyToSiblings}
+            onChange={(e) => setApplyToSiblings(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            Also mark the {siblings.length} other open report{siblings.length === 1 ? "" : "s"} on this panel the same
+            way
+          </span>
+        </label>
+      )}
+
+      {error && <p className="text-[12px] text-bad-600 mb-3">{error}</p>}
+
+      <div className="flex items-center justify-between gap-2 mt-2">
+        {issue.isManual ? (
+          <button
+            type="button"
+            onClick={() => onSave([issue.id], { resolution: null })}
+            className="text-[12px] font-semibold text-bad-600 hover:text-bad-700"
+          >
+            Reopen issue
+          </button>
+        ) : (
+          <span />
+        )}
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={handleSave}>Save Status</Button>
+        </div>
+      </div>
+    </Modal>
   );
 }

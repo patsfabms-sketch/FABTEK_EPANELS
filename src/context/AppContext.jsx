@@ -208,6 +208,9 @@ const WORKHISTORY_FIELD_MAP = {
   notes: "notes",
   packoutMissingParts: "packout_missing_parts",
   packoutMissingDescription: "packout_missing_description",
+  packoutResolution: "packout_resolution",
+  packoutResolvedAt: "packout_resolved_at",
+  packoutResolutionNote: "packout_resolution_note",
 };
 function toDbWorkHistoryFields(fields) {
   const out = {};
@@ -268,6 +271,14 @@ function fromDbWorkHistory(row) {
     // before this requirement existed. See computePackoutIssues.
     packoutMissingParts: row.packout_missing_parts,
     packoutMissingDescription: row.packout_missing_description ?? null,
+    // Manual status an admin sets on a reported packout issue from the
+    // Packout Issues page: "received" (the missing part arrived) or
+    // "shipped_without" (the panel went out without it). Null = no manual
+    // status yet (the issue may still auto-resolve if a later packout check
+    // on the same build comes back clean — see computePackoutIssues).
+    packoutResolution: row.packout_resolution ?? null,
+    packoutResolvedAt: row.packout_resolved_at ?? null,
+    packoutResolutionNote: row.packout_resolution_note ?? null,
   };
 }
 
@@ -983,6 +994,33 @@ export function AppProvider({ children }) {
     );
   }
 
+  // Sets (or clears, with resolution = null) the manual status on one or more
+  // reported packout issues — entryIds are the Verifying Packout work-history
+  // rows that reported the missing part (a computePackoutIssues issue's `id`).
+  // Separate from updateWorkHistoryEntry so it doesn't log a generic "corrected
+  // a logged session" activity — this logs what actually happened instead.
+  function setPackoutIssueStatus(entryIds, { resolution, resolvedAt = null, note = null }) {
+    const ids = Array.isArray(entryIds) ? entryIds : [entryIds];
+    const fields = resolution
+      ? {
+          packoutResolution: resolution,
+          packoutResolvedAt: resolvedAt ?? new Date().toISOString(),
+          packoutResolutionNote: note && note.trim() ? note.trim() : null,
+        }
+      : { packoutResolution: null, packoutResolvedAt: null, packoutResolutionNote: null };
+    setWorkHistory((prev) => prev.map((h) => (ids.includes(h.id) ? { ...h, ...fields } : h)));
+    supabase.from("assemblyos_work_history").update(toDbWorkHistoryFields(fields)).in("id", ids).then(reportResult);
+    const first = workHistory.find((h) => h.id === ids[0]);
+    const what = !resolution
+      ? "reopened a packout issue"
+      : resolution === "received"
+      ? "marked a missing packout part as received"
+      : "marked a panel as shipped without its missing packout part";
+    logActivity(what, first ? `Panel ${first.panel}${ids.length > 1 ? ` · ${ids.length} reports` : ""}` : "", {
+      kind: "verify",
+    });
+  }
+
   // Admin correction for a logged session entry — for mishaps: a technician
   // scanned the wrong stage, mistyped/misremembered hours, the break-window
   // math looked off, etc. See EmployeeDetail.jsx's Recent Activity table.
@@ -1613,6 +1651,7 @@ export function AppProvider({ children }) {
     updatePanel,
     deletePanel,
     updateWorkHistoryEntry,
+    setPackoutIssueStatus,
     deleteWorkHistoryEntry,
     startSession,
     setSessionNotes,

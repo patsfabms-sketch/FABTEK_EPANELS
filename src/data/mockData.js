@@ -844,12 +844,16 @@ export const VERIFY_STAGE_LABEL = productionStages.find((s) => s.key === VERIFY_
 // deduplicated per panel, since Pat wants to see "all the issues," including
 // a panel flagged more than once for different missing items.
 //
-// An issue counts as resolved once a LATER Verifying Packout session on the
-// same build either reports packoutMissingParts === false (checked again,
-// nothing missing that time) or taskCompleted === true (verification was
-// finished) — whichever comes first chronologically after the report. If no
-// such later session exists yet, the issue is still open and daysOpen is
-// measured against `now`.
+// Status, in priority order:
+//  1. MANUAL — an admin set it on the Packout Issues page
+//     (packoutResolution on the reporting row): "received" (the part
+//     arrived) or "shipped_without" (the panel went out without it). Always
+//     wins, since it's a real person recording what actually happened.
+//  2. AUTOMATIC ("reverified") — a LATER Verifying Packout session on the
+//     same build either reports packoutMissingParts === false (checked again,
+//     nothing missing that time) or taskCompleted === true (verification was
+//     finished), whichever comes first chronologically after the report.
+//  3. Otherwise still open, and daysOpen is measured against `now`.
 export function computePackoutIssues(panels, workHistory, employees, { now = Date.now() } = {}) {
   const employeeById = new Map(employees.map((e) => [e.id, e]));
   const panelByBuildId = new Map(panels.map((p) => [p.buildId, p]));
@@ -863,12 +867,18 @@ export function computePackoutIssues(panels, workHistory, employees, { now = Dat
   const issues = [];
   verifyRows.forEach((h) => {
     if (h.packoutMissingParts !== true) return;
-    const resolution = verifyRows.find(
-      (later) =>
-        later.buildId === h.buildId &&
-        later._t > h._t &&
-        (later.taskCompleted || later.packoutMissingParts === false)
-    );
+    const manualAt = h.packoutResolution && h.packoutResolvedAt ? new Date(h.packoutResolvedAt).getTime() : NaN;
+    const hasManual = !!h.packoutResolution && !Number.isNaN(manualAt);
+    const autoResolution = hasManual
+      ? null
+      : verifyRows.find(
+          (later) =>
+            later.buildId === h.buildId &&
+            later._t > h._t &&
+            (later.taskCompleted || later.packoutMissingParts === false)
+        );
+    const resolution = hasManual ? { _t: manualAt, createdAt: h.packoutResolvedAt } : autoResolution;
+    const resolutionType = hasManual ? h.packoutResolution : autoResolution ? "reverified" : null;
     const panel = panelByBuildId.get(h.buildId);
     const reportedBy = employeeById.get(h.employeeId);
     const endTime = resolution ? resolution._t : now;
@@ -884,6 +894,9 @@ export function computePackoutIssues(panels, workHistory, employees, { now = Dat
       reportedByName: reportedBy?.name ?? "Unknown",
       reportedAt: h.createdAt,
       resolved: !!resolution,
+      resolutionType, // "received" | "shipped_without" | "reverified" | null (open)
+      isManual: hasManual,
+      resolutionNote: hasManual ? h.packoutResolutionNote || "" : "",
       resolvedAt: resolution ? resolution.createdAt : null,
       daysOpen: Number(Math.max(0, (endTime - h._t) / 86400000).toFixed(1)),
     });
