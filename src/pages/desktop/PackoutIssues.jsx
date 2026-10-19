@@ -22,7 +22,7 @@ import { Card, SectionTitle, StatCard, Button, Modal, formatDateTime } from "../
 // structured answer, not free-text notes, is what this page tracks.
 export default function PackoutIssues() {
   const { panels, workHistory, employees, setPackoutIssueStatus } = useApp();
-  const [editingIssue, setEditingIssue] = useState(null);
+  const [editing, setEditing] = useState(null); // { group, preselectId }
   const [search, setSearch] = useState("");
   const [showAll, setShowAll] = useState(false);
 
@@ -48,17 +48,55 @@ export default function PackoutIssues() {
   const shippedWithoutCount = useMemo(() => issues.filter((i) => i.resolutionType === "shipped_without").length, [issues]);
   const reverifiedCount = useMemo(() => issues.filter((i) => i.resolutionType === "reverified").length, [issues]);
 
-  const filtered = useMemo(() => {
+  // One entry per PANEL (build), not per report — a kit that came up short
+  // more than once shows as a single row with its reports listed inside, so
+  // the page stays compact. `issues` arrives newest-first, so panels order by
+  // their most recent shown report. In "Open Only" mode just the still-open
+  // reports are listed (resolved ones are counted in `hiddenResolved`);
+  // "All Issues" lists every report. `allIssues` is always the panel's full
+  // set — the status modal lets you pick from all of them.
+  const groups = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return (showAll ? issues : openIssues).filter((i) => {
-      if (!q) return true;
-      const haystack = [i.panelTag, i.jobNumber, i.customer, i.missingDescription, i.reportedByName]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(q);
+    const allByBuild = new Map();
+    issues.forEach((i) => {
+      if (!allByBuild.has(i.buildId)) allByBuild.set(i.buildId, []);
+      allByBuild.get(i.buildId).push(i);
     });
+    const byBuild = new Map();
+    (showAll ? issues : openIssues).forEach((i) => {
+      if (!byBuild.has(i.buildId)) byBuild.set(i.buildId, []);
+      byBuild.get(i.buildId).push(i);
+    });
+    return Array.from(byBuild.entries())
+      .map(([buildId, shown]) => {
+        const allIssues = allByBuild.get(buildId);
+        const first = shown[0];
+        return {
+          buildId,
+          panelTag: first.panelTag,
+          jobNumber: first.jobNumber,
+          customer: first.customer,
+          issues: shown,
+          allIssues,
+          openCount: allIssues.filter((i) => !i.resolved).length,
+          hiddenResolved: allIssues.length - shown.length,
+        };
+      })
+      .filter((g) => {
+        if (!q) return true;
+        const haystack = [
+          g.panelTag,
+          g.jobNumber,
+          g.customer,
+          ...g.issues.flatMap((i) => [i.missingDescription, i.reportedByName]),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(q);
+      });
   }, [issues, openIssues, showAll, search]);
+  const shownIssueCount = useMemo(() => groups.reduce((n, g) => n + g.issues.length, 0), [groups]);
 
   return (
     <div className="p-6 max-w-[1300px] mx-auto">
@@ -124,10 +162,12 @@ export default function PackoutIssues() {
 
       <SectionTitle
         title={showAll ? "All Reported Issues" : "Open Issues"}
-        subtitle={`${filtered.length} issue${filtered.length === 1 ? "" : "s"} shown`}
+        subtitle={`${groups.length} panel${groups.length === 1 ? "" : "s"} · ${shownIssueCount} issue${
+          shownIssueCount === 1 ? "" : "s"
+        } shown`}
       />
       <Card padded={false} className="overflow-x-auto mb-3">
-        {filtered.length === 0 ? (
+        {groups.length === 0 ? (
           <p className="text-xs text-ink-400 text-center py-8">
             {showAll
               ? "No packout issues have been reported yet."
@@ -137,64 +177,89 @@ export default function PackoutIssues() {
           <table className="w-full text-[13px]">
             <thead>
               <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
-                <th className="px-4 py-3 font-semibold">Reported</th>
                 <th className="px-4 py-3 font-semibold">Panel</th>
                 <th className="px-4 py-3 font-semibold">Customer</th>
-                <th className="px-4 py-3 font-semibold">What's Missing</th>
-                <th className="px-4 py-3 font-semibold">Reported By</th>
-                <th className="px-4 py-3 font-semibold">Status</th>
-                <th className="px-4 py-3 font-semibold text-right print:hidden">Update</th>
+                <th className="px-4 py-3 font-semibold">Issues</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((i, idx) => (
+              {groups.map((g, idx) => (
                 <tr
-                  key={i.id}
-                  className={`border-b border-paper-100 last:border-0 ${
-                    !i.resolved ? "bg-bad-50/30" : idx % 2 === 1 ? "bg-paper-50/60" : ""
+                  key={g.buildId}
+                  className={`border-b border-paper-100 last:border-0 align-top ${
+                    g.openCount > 0 ? "bg-bad-50/30" : idx % 2 === 1 ? "bg-paper-50/60" : ""
                   }`}
                 >
-                  <td className="px-4 py-2.5 text-ink-600 whitespace-nowrap">{formatDateTime(i.reportedAt)}</td>
-                  <td className="px-4 py-2.5 text-ink-900 font-medium">
-                    {i.panelTag}
-                    {i.jobNumber && <span className="text-ink-400"> · Job #{i.jobNumber}</span>}
-                  </td>
-                  <td className="px-4 py-2.5 text-ink-600">{i.customer || "—"}</td>
-                  <td className="px-4 py-2.5 text-ink-700">{i.missingDescription || "—"}</td>
-                  <td className="px-4 py-2.5 text-ink-600">{i.reportedByName}</td>
-                  <td className="px-4 py-2.5">
-                    {i.resolved ? (
-                      <span className="inline-flex flex-col">
-                        <span
-                          className={`text-[10px] font-semibold rounded-full px-2 py-0.5 w-fit ${
-                            i.resolutionType === "shipped_without" ? "bg-warn-50 text-warn-600" : "bg-good-50 text-good-600"
-                          }`}
-                        >
-                          {STATUS_LABEL[i.resolutionType] ?? "Resolved"}
-                        </span>
-                        <span className="text-[10px] text-ink-400 mt-1">
-                          after {i.daysOpen} day{i.daysOpen === 1 ? "" : "s"} · {formatDateTime(i.resolvedAt)}
-                        </span>
-                        {i.resolutionNote && <span className="text-[11px] text-ink-600 mt-1 max-w-[220px]">{i.resolutionNote}</span>}
-                      </span>
-                    ) : (
-                      <span className="inline-flex flex-col">
-                        <span className="text-[10px] font-semibold rounded-full px-2 py-0.5 bg-bad-50 text-bad-600 w-fit">
-                          Still Missing
-                        </span>
-                        <span className="text-[10px] text-ink-400 mt-1">
-                          open {i.daysOpen} day{i.daysOpen === 1 ? "" : "s"}
-                        </span>
-                      </span>
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <p className="text-ink-900 font-medium">{g.panelTag}</p>
+                    {g.jobNumber && <p className="text-[11px] text-ink-400">Job #{g.jobNumber}</p>}
+                    <p className="text-[11px] text-ink-500 mt-1">
+                      {g.allIssues.length} report{g.allIssues.length === 1 ? "" : "s"}
+                      {g.openCount > 0 ? ` · ${g.openCount} open` : " · all closed"}
+                    </p>
+                    {g.openCount > 1 && (
+                      <button
+                        onClick={() => setEditing({ group: g, preselectId: null })}
+                        className="mt-1.5 text-[11px] font-semibold text-brand-600 hover:text-brand-700 print:hidden"
+                      >
+                        Update several…
+                      </button>
                     )}
                   </td>
-                  <td className="px-4 py-2.5 text-right print:hidden">
-                    <button
-                      onClick={() => setEditingIssue(i)}
-                      className="text-[12px] font-semibold text-brand-600 hover:text-brand-700 whitespace-nowrap"
-                    >
-                      {i.resolved ? "Change Status" : "Update Status"}
-                    </button>
+                  <td className="px-4 py-3 text-ink-600">{g.customer || "—"}</td>
+                  <td className="px-4 py-1 w-full">
+                    {g.issues.map((i) => (
+                      <div
+                        key={i.id}
+                        className="flex items-start justify-between gap-4 py-2 border-b border-paper-100 last:border-0"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="text-ink-700 whitespace-pre-line">{i.missingDescription || "—"}</p>
+                          <p className="text-[10px] text-ink-400 mt-0.5">
+                            Reported {formatDateTime(i.reportedAt)} by {i.reportedByName}
+                          </p>
+                          {i.resolutionNote && <p className="text-[11px] text-ink-600 mt-1">Note: {i.resolutionNote}</p>}
+                        </div>
+                        <div className="shrink-0 text-right">
+                          {i.resolved ? (
+                            <span className="inline-flex flex-col items-end">
+                              <span
+                                className={`text-[10px] font-semibold rounded-full px-2 py-0.5 w-fit ${
+                                  i.resolutionType === "shipped_without"
+                                    ? "bg-warn-50 text-warn-600"
+                                    : "bg-good-50 text-good-600"
+                                }`}
+                              >
+                                {STATUS_LABEL[i.resolutionType] ?? "Resolved"}
+                              </span>
+                              <span className="text-[10px] text-ink-400 mt-1">
+                                after {i.daysOpen} day{i.daysOpen === 1 ? "" : "s"} · {formatDateTime(i.resolvedAt)}
+                              </span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex flex-col items-end">
+                              <span className="text-[10px] font-semibold rounded-full px-2 py-0.5 bg-bad-50 text-bad-600 w-fit">
+                                Still Missing
+                              </span>
+                              <span className="text-[10px] text-ink-400 mt-1">
+                                open {i.daysOpen} day{i.daysOpen === 1 ? "" : "s"}
+                              </span>
+                            </span>
+                          )}
+                          <button
+                            onClick={() => setEditing({ group: g, preselectId: i.id })}
+                            className="mt-1 text-[12px] font-semibold text-brand-600 hover:text-brand-700 whitespace-nowrap print:hidden"
+                          >
+                            {i.resolved ? "Change Status" : "Update Status"}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {!showAll && g.hiddenResolved > 0 && (
+                      <p className="text-[10px] text-ink-400 py-2 print:hidden">
+                        + {g.hiddenResolved} closed report{g.hiddenResolved === 1 ? "" : "s"} on this panel (see All Issues)
+                      </p>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -203,14 +268,14 @@ export default function PackoutIssues() {
         )}
       </Card>
 
-      {editingIssue && (
+      {editing && (
         <UpdateStatusModal
-          issue={editingIssue}
-          siblings={openIssues.filter((o) => o.buildId === editingIssue.buildId && o.id !== editingIssue.id)}
-          onClose={() => setEditingIssue(null)}
+          group={editing.group}
+          preselectId={editing.preselectId}
+          onClose={() => setEditing(null)}
           onSave={(ids, payload) => {
             setPackoutIssueStatus(ids, payload);
-            setEditingIssue(null);
+            setEditing(null);
           }}
         />
       )}
@@ -225,8 +290,8 @@ export default function PackoutIssues() {
           required answer captured on every packout check going forward, not a note that can be skipped or lost.
         </p>
         <p>
-          <strong className="text-ink-900">Status is set by a person.</strong> From the Update column an admin marks
-          each issue <em>Part Received</em> (the missing part arrived) or <em>Shipped Without Part</em> (the panel
+          <strong className="text-ink-900">Status is set by a person.</strong> Reports on the same panel are grouped into one row. An admin
+          picks which report(s) they're updating and marks each <em>Part Received</em> (the missing part arrived) or <em>Shipped Without Part</em> (the panel
           went out without it), with the date it happened and an optional note — a real record of what actually
           occurred, not a guess. Either one closes the issue; an issue can be reopened at any time. A panel that
           shipped without a part stays counted as an issue that was reported, so it still shows up as evidence of a
@@ -269,29 +334,55 @@ function dateToIso(dateStr) {
   return new Date(`${dateStr}T12:00:00`).toISOString();
 }
 
-function UpdateStatusModal({ issue, siblings, onClose, onSave }) {
-  const [choice, setChoice] = useState(issue.isManual ? issue.resolutionType : "");
-  const [date, setDate] = useState(() =>
-    issue.isManual && issue.resolvedAt ? localDateString(new Date(issue.resolvedAt)) : localDateString()
+function UpdateStatusModal({ group, preselectId, onClose, onSave }) {
+  const clicked = preselectId ? group.allIssues.find((i) => i.id === preselectId) : null;
+  const prefill = clicked && clicked.isManual ? clicked : null;
+
+  const [selected, setSelected] = useState(
+    () => new Set(preselectId ? [preselectId] : group.allIssues.filter((i) => !i.resolved).map((i) => i.id))
   );
-  const [note, setNote] = useState(issue.resolutionNote || "");
-  const [applyToSiblings, setApplyToSiblings] = useState(true);
+  const [choice, setChoice] = useState(prefill ? prefill.resolutionType : "");
+  const [date, setDate] = useState(() =>
+    prefill && prefill.resolvedAt ? localDateString(new Date(prefill.resolvedAt)) : localDateString()
+  );
+  const [note, setNote] = useState(prefill ? prefill.resolutionNote || "" : "");
   const [error, setError] = useState("");
 
-  const minDate = localDateString(new Date(issue.reportedAt));
+  const selectedIssues = group.allIssues.filter((i) => selected.has(i.id));
+  const selectedManual = selectedIssues.filter((i) => i.isManual);
+  // The status date can't predate any selected report.
+  const minDate = selectedIssues.length
+    ? localDateString(new Date(Math.max(...selectedIssues.map((i) => new Date(i.reportedAt).getTime()))))
+    : localDateString(new Date(group.allIssues[group.allIssues.length - 1].reportedAt));
   const maxDate = localDateString();
 
+  function toggle(id) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    setError("");
+  }
+
   function handleSave() {
+    if (selectedIssues.length === 0) {
+      setError("Select at least one issue to update.");
+      return;
+    }
     if (!choice) {
       setError("Pick what happened: part received, or shipped without it.");
       return;
     }
     if (!date || date < minDate || date > maxDate) {
-      setError("Pick a date between when it was reported and today.");
+      setError("Pick a date between when the selected issue(s) were reported and today.");
       return;
     }
-    const ids = [issue.id, ...(applyToSiblings && !issue.isManual ? siblings.map((s) => s.id) : [])];
-    onSave(ids, { resolution: choice, resolvedAt: dateToIso(date), note });
+    onSave(
+      selectedIssues.map((i) => i.id),
+      { resolution: choice, resolvedAt: dateToIso(date), note }
+    );
   }
 
   const options = [
@@ -300,14 +391,36 @@ function UpdateStatusModal({ issue, siblings, onClose, onSave }) {
   ];
 
   return (
-    <Modal onClose={onClose} widthClass="max-w-[440px]">
+    <Modal onClose={onClose} widthClass="max-w-[480px]">
       <h3 className="text-sm font-semibold text-ink-900 mb-1">
-        Update status — {issue.panelTag}
-        {issue.jobNumber && <span className="text-ink-400 font-normal"> · Job #{issue.jobNumber}</span>}
+        Update status — {group.panelTag}
+        {group.jobNumber && <span className="text-ink-400 font-normal"> · Job #{group.jobNumber}</span>}
       </h3>
-      <p className="text-[12px] text-ink-500 mb-4">
-        Missing: <span className="text-ink-700">{issue.missingDescription || "(no description)"}</span>
+      <p className="text-[12px] text-ink-500 mb-3">
+        {group.allIssues.length > 1
+          ? "Choose which issue(s) on this panel you're updating."
+          : "Update the status of this issue."}
       </p>
+
+      <div className="space-y-1.5 mb-4 max-h-[200px] overflow-y-auto">
+        {group.allIssues.map((i) => (
+          <label
+            key={i.id}
+            className={`flex items-start gap-2.5 rounded-lg border px-3 py-2 cursor-pointer ${
+              selected.has(i.id) ? "border-brand-500 bg-brand-50/40" : "border-paper-200 bg-white hover:bg-paper-50"
+            }`}
+          >
+            <input type="checkbox" checked={selected.has(i.id)} onChange={() => toggle(i.id)} className="mt-1" />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[12px] text-ink-700 whitespace-pre-line">{i.missingDescription || "—"}</span>
+              <span className="block text-[10px] text-ink-400 mt-0.5">
+                Reported {formatDateTime(i.reportedAt)} ·{" "}
+                {i.resolved ? `currently: ${STATUS_LABEL[i.resolutionType] ?? "Resolved"}` : "currently: Still Missing"}
+              </span>
+            </span>
+          </label>
+        ))}
+      </div>
 
       <div className="space-y-2 mb-4">
         {options.map((o) => (
@@ -354,31 +467,16 @@ function UpdateStatusModal({ issue, siblings, onClose, onSave }) {
         className="w-full rounded-lg border border-paper-200 bg-white px-3 py-2 text-[13px] text-ink-700 mb-3"
       />
 
-      {!issue.isManual && siblings.length > 0 && (
-        <label className="flex items-start gap-2 text-[12px] text-ink-600 mb-3">
-          <input
-            type="checkbox"
-            checked={applyToSiblings}
-            onChange={(e) => setApplyToSiblings(e.target.checked)}
-            className="mt-0.5"
-          />
-          <span>
-            Also mark the {siblings.length} other open report{siblings.length === 1 ? "" : "s"} on this panel the same
-            way
-          </span>
-        </label>
-      )}
-
       {error && <p className="text-[12px] text-bad-600 mb-3">{error}</p>}
 
       <div className="flex items-center justify-between gap-2 mt-2">
-        {issue.isManual ? (
+        {selectedManual.length > 0 ? (
           <button
             type="button"
-            onClick={() => onSave([issue.id], { resolution: null })}
+            onClick={() => onSave(selectedManual.map((i) => i.id), { resolution: null })}
             className="text-[12px] font-semibold text-bad-600 hover:text-bad-700"
           >
-            Reopen issue
+            Reopen {selectedManual.length === 1 ? "issue" : `${selectedManual.length} issues`}
           </button>
         ) : (
           <span />
@@ -387,7 +485,9 @@ function UpdateStatusModal({ issue, siblings, onClose, onSave }) {
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={handleSave}>Save Status</Button>
+          <Button onClick={handleSave}>
+            Save Status{selectedIssues.length > 1 ? ` (${selectedIssues.length})` : ""}
+          </Button>
         </div>
       </div>
     </Modal>
