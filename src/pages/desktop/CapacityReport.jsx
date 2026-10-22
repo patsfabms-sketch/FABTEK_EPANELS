@@ -151,6 +151,50 @@ export default function CapacityReport() {
         </Card>
       )}
 
+      {hoursMix.goal && hoursMix.goal.staffingScenarios.length > 0 && (
+        <Card className="mb-3">
+          <p className="text-[13px] font-semibold text-ink-900 mb-1">
+            People needed to hit {hoursMix.goal.targetPanelsPerDay} panels/day
+          </p>
+          <p className="text-[12px] text-ink-500 mb-3">
+            Today's crew is {hoursMix.goal.currentHeadcount} people (who clocked time last complete week). Each row asks
+            "if the crew kept producing per person the way it did in that stretch, how many people would{" "}
+            {hoursMix.goal.targetPanelsPerDay}/day take?"
+          </p>
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
+                <th className="py-2 pr-4 font-semibold">Based on</th>
+                <th className="py-2 pr-4 font-semibold">Panels/Day at 40 Hrs</th>
+                <th className="py-2 pr-4 font-semibold">People Then</th>
+                <th className="py-2 pr-4 font-semibold">Per Person/Day</th>
+                <th className="py-2 pr-4 font-semibold">People Needed</th>
+                <th className="py-2 font-semibold">Add</th>
+              </tr>
+            </thead>
+            <tbody>
+              {hoursMix.goal.staffingScenarios.map((sc) => (
+                <tr key={sc.key} className="border-b border-paper-100 last:border-0">
+                  <td className="py-2 pr-4 font-medium text-ink-900">
+                    {sc.label}
+                    <span className="text-[11px] text-ink-400"> ({sc.weeks} wk{sc.weeks === 1 ? "" : "s"})</span>
+                  </td>
+                  <td className="py-2 pr-4 text-ink-700">{sc.panelsPerDayAt40}</td>
+                  <td className="py-2 pr-4 text-ink-700">{sc.headcount}</td>
+                  <td className="py-2 pr-4 text-ink-700">{sc.perPersonPerDay}</td>
+                  <td className="py-2 pr-4 text-ink-700">{sc.peopleNeeded}</td>
+                  <td className="py-2 font-semibold text-ink-900">{sc.addPeople !== null ? `+${sc.addPeople}` : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="text-[11px] text-ink-400 mt-3">
+            A planning estimate: it assumes a new hire eventually produces like the current crew. It ignores ramp-up and
+            training time, and any step that can't scale with headcount (Packout Verifying, QC/Wrap, floor space).
+          </p>
+        </Card>
+      )}
+
       <Card padded={false} className="overflow-x-auto mb-3">
         {hoursMix.weeks.length === 0 ? (
           <p className="text-xs text-ink-400 text-center py-8">No complete payroll week with clocked hours yet.</p>

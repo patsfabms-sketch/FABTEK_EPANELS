@@ -1497,10 +1497,12 @@ export function computeCapacityByHoursMix(panels, workHistory, clockLog, employe
       const { start, end } = payrollWeekRange(new Date(y, m - 1, d));
       let regularHours = 0;
       let overtimeHours = 0;
+      let headcount = 0; // people who actually clocked time that week
       employees.forEach((emp) => {
         const pay = computeOvertimePay(clockLog, emp, start, end, { now });
         regularHours += pay.regularHours;
         overtimeHours += pay.overtimeHours;
+        if (pay.regularHours + pay.overtimeHours > 0) headcount += 1;
       });
       regularHours = Number(regularHours.toFixed(2));
       overtimeHours = Number(overtimeHours.toFixed(2));
@@ -1519,6 +1521,7 @@ export function computeCapacityByHoursMix(panels, workHistory, clockLog, employe
         inProgress: wk === currentWeekKey,
         noShipData: wk !== currentWeekKey && shipped === 0,
         shipped,
+        headcount,
         connections,
         avgConnectionsPerPanel: shipped > 0 ? Math.round(connections / shipped) : null,
         daysActive,
@@ -1569,6 +1572,46 @@ export function computeCapacityByHoursMix(panels, workHistory, clockLog, employe
   // allow this many hours per panel (and per connection) to get there.
   const targetPanelsPerDay = CAPACITY_TARGET_PER_DAY;
   const crewHoursPerDay = weekCount > 0 ? totalRegularHours / totalDays : null;
+
+  // "How many people to hit the goal" — three honest scenarios, since one
+  // number would hide how much the answer swings week to week. Each takes a
+  // slice of complete weeks, finds panels/day at 40 hrs PER PERSON who
+  // actually clocked time (size-adjusted to the average panel, same as the
+  // headline figure), and asks how many such people the target needs. This
+  // assumes a new hire eventually produces like the current crew (no ramp-up
+  // time, no downstream bottleneck) — a planning estimate, not a promise.
+  const panelsAt40ForWeeks = (ws) =>
+    ws.reduce((sum, w) => sum + w.regularAttributedConns, 0) / (ws.length * STANDARD_DAYS_PER_WEEK) / avgConnectionsPerPanel;
+  const scenarioFor = (key, label, ws) => {
+    if (!ready || ws.length === 0) return null;
+    const panelsPerDayAt40 = panelsAt40ForWeeks(ws);
+    const headcount = ws.reduce((sum, w) => sum + w.headcount, 0) / ws.length;
+    const perPersonPerDay = panelsPerDayAt40 / headcount;
+    const peopleNeeded = Math.ceil(targetPanelsPerDay / perPersonPerDay);
+    return {
+      key,
+      label,
+      weeks: ws.length,
+      panelsPerDayAt40: Number(panelsPerDayAt40.toFixed(2)),
+      headcount: Number(headcount.toFixed(1)),
+      perPersonPerDay: Number(perPersonPerDay.toFixed(2)),
+      peopleNeeded,
+    };
+  };
+  const chronological = includedWeeks.slice().sort((a, b) => (a.weekOf < b.weekOf ? -1 : 1));
+  const bestWeek = chronological.reduce(
+    (best, w) => (best === null || w.regularAttributedConns / w.headcount > best.regularAttributedConns / best.headcount ? w : best),
+    null
+  );
+  const lastCompleteWeek = weeks.filter((w) => !w.inProgress && w.headcount > 0).slice(-1)[0] ?? null;
+  const currentHeadcount = lastCompleteWeek ? lastCompleteWeek.headcount : null;
+  const staffingScenarios = [
+    scenarioFor("overall", "All complete weeks", chronological),
+    scenarioFor("recent", "Last 4 weeks", chronological.slice(-4)),
+    bestWeek ? scenarioFor("best", "Best week", [bestWeek]) : null,
+  ]
+    .filter(Boolean)
+    .map((sc) => ({ ...sc, addPeople: currentHeadcount !== null ? Math.max(0, sc.peopleNeeded - currentHeadcount) : null }));
   const goal = ready
     ? {
         targetPanelsPerDay,
@@ -1582,6 +1625,8 @@ export function computeCapacityByHoursMix(panels, workHistory, clockLog, employe
         actualHoursPerPanel: Number((totalAllHours / totalShipped).toFixed(1)),
         goalHoursPer100Connections: Number(((crewHoursPerDay / targetPanelsPerDay / avgConnectionsPerPanel) * 100).toFixed(1)),
         actualHoursPer100Connections: Number(((totalAllHours / totalConnections) * 100).toFixed(1)),
+        currentHeadcount,
+        staffingScenarios,
       }
     : null;
 
