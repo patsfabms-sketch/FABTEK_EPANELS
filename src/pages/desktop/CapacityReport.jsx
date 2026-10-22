@@ -87,13 +87,20 @@ export default function CapacityReport() {
 
       <SectionTitle
         title="Output vs. Overtime"
-        subtitle="Internal planning number, not the Siemens figure above — every day counts here (weekday doesn't matter), based on 40 hrs/week of capacity per employee, reset every payroll week (Wed 12am)"
+        subtitle={`Internal planning number, not the Siemens figure above — a "day" is 1/5 of the 40-hr week (weekday doesn't matter), the week resets every Wednesday 12am, and panels are measured by connections since every panel is a different size`}
       />
       <div className="flex flex-wrap gap-4 mb-3">
         <StatCard
           label="Avg Panels/Day at 40 Hrs"
           value={hoursMix.avgPanelsPerDayAt40 !== null ? hoursMix.avgPanelsPerDayAt40 : "—"}
-          sub="if the crew only worked their regular 40 hrs/week — any day, not just Mon–Fri"
+          sub={
+            hoursMix.goal
+              ? `goal is ${hoursMix.goal.targetPanelsPerDay}/day · at the avg panel size (${hoursMix.avgConnectionsPerPanel} connections)`
+              : "no complete week with shipped panels yet"
+          }
+          accent={
+            hoursMix.goal && hoursMix.avgPanelsPerDayAt40 >= hoursMix.goal.targetPanelsPerDay ? "text-good-600" : "text-ink-900"
+          }
         />
         <StatCard
           label="Avg Panels/Day with OT"
@@ -107,6 +114,43 @@ export default function CapacityReport() {
           sub={`from ${hoursMix.totalOvertimeHours} total OT hrs across ${hoursMix.weeksIncluded} complete week${hoursMix.weeksIncluded === 1 ? "" : "s"}`}
         />
       </div>
+
+      {hoursMix.goal && (
+        <Card className="mb-3">
+          <p className="text-[13px] font-semibold text-ink-900 mb-1">
+            What it takes to hit {hoursMix.goal.targetPanelsPerDay} panels/day on 40 hours
+          </p>
+          <p className="text-[12px] text-ink-500 mb-3">
+            At the average panel size of {hoursMix.avgConnectionsPerPanel} connections, over {hoursMix.weeksIncluded}{" "}
+            complete week{hoursMix.weeksIncluded === 1 ? "" : "s"} with shipped panels.
+          </p>
+          <div className="flex flex-wrap gap-x-10 gap-y-3 text-[13px]">
+            <div>
+              <p className="text-[11px] text-ink-500">Connections shipped per day</p>
+              <p className="text-ink-900">
+                <span className="font-semibold">{hoursMix.goal.connectionsPerDayActualAt40.toLocaleString()}</span> now at 40 hrs ·{" "}
+                <span className="font-semibold">{hoursMix.goal.connectionsPerDayNeeded.toLocaleString()}</span> needed
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] text-ink-500">Crew hours per panel</p>
+              <p className="text-ink-900">
+                <span className="font-semibold">{hoursMix.goal.actualHoursPerPanel}</span> hrs now ·{" "}
+                <span className="font-semibold">{hoursMix.goal.goalHoursPerPanel}</span> hrs allowed
+                <span className="text-ink-400"> ({hoursMix.goal.crewHoursPerDay} crew-hrs/day ÷ {hoursMix.goal.targetPanelsPerDay})</span>
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] text-ink-500">Crew hours per 100 connections</p>
+              <p className="text-ink-900">
+                <span className="font-semibold">{hoursMix.goal.actualHoursPer100Connections}</span> hrs now ·{" "}
+                <span className="font-semibold">{hoursMix.goal.goalHoursPer100Connections}</span> hrs allowed
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
+
       <Card padded={false} className="overflow-x-auto mb-3">
         {hoursMix.weeks.length === 0 ? (
           <p className="text-xs text-ink-400 text-center py-8">No complete payroll week with clocked hours yet.</p>
@@ -115,8 +159,10 @@ export default function CapacityReport() {
             <thead>
               <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-paper-200">
                 <th className="px-4 py-3 font-semibold">Payroll Week Of</th>
-                <th className="px-4 py-3 font-semibold">Days Active</th>
                 <th className="px-4 py-3 font-semibold">Shipped</th>
+                <th className="px-4 py-3 font-semibold">Connections</th>
+                <th className="px-4 py-3 font-semibold">Avg Conns/Panel</th>
+                <th className="px-4 py-3 font-semibold">Panels/Day</th>
                 <th className="px-4 py-3 font-semibold">Regular Hrs</th>
                 <th className="px-4 py-3 font-semibold">OT Hrs</th>
                 <th className="px-4 py-3 font-semibold">Panels at 40 Hrs</th>
@@ -125,13 +171,16 @@ export default function CapacityReport() {
             </thead>
             <tbody>
               {hoursMix.weeks.map((w, i) => (
-                <tr key={w.weekOf} className={`border-b border-paper-100 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""} ${w.inProgress ? "opacity-60" : ""}`}>
+                <tr key={w.weekOf} className={`border-b border-paper-100 last:border-0 ${i % 2 === 1 ? "bg-paper-50/60" : ""} ${w.inProgress || w.noShipData ? "opacity-60" : ""}`}>
                   <td className="px-4 py-2.5 font-medium text-ink-900">
                     {formatDate(w.weekOf)}
                     {w.inProgress && <span className="ml-2 text-[10px] text-ink-400 uppercase tracking-wide">In progress</span>}
+                    {w.noShipData && <span className="ml-2 text-[10px] text-ink-400 uppercase tracking-wide">No ships logged — not counted</span>}
                   </td>
-                  <td className="px-4 py-2.5 text-ink-700">{w.daysActive}</td>
                   <td className="px-4 py-2.5 text-ink-700">{w.shipped}</td>
+                  <td className="px-4 py-2.5 text-ink-700">{w.connections.toLocaleString()}</td>
+                  <td className="px-4 py-2.5 text-ink-700">{w.avgConnectionsPerPanel ?? "—"}</td>
+                  <td className="px-4 py-2.5 text-ink-700">{w.panelsPerDay ?? "—"}</td>
                   <td className="px-4 py-2.5 text-ink-700">{w.regularHours}</td>
                   <td className="px-4 py-2.5 text-ink-700">{w.overtimeHours}</td>
                   <td className="px-4 py-2.5 text-ink-700">{w.regularAttributedPanels}</td>
@@ -143,16 +192,14 @@ export default function CapacityReport() {
         )}
       </Card>
       <p className="text-[11px] text-ink-400 mt-3 mb-8">
-        There's no way to know which specific clocked hour built which specific panel, so each week's real shipped
-        count is split across that week's regular vs. overtime hours in direct proportion to how many of each were
-        worked — the same kind of approximation this app already uses for Overtime Cost by Panel on Analytics. This
-        isn't a claim that an overtime hour is exactly as productive as a regular one, just the simplest honest way to
-        turn "X panels on Y total hours, Z of them overtime" into an apples-to-apples 40-hrs-vs-with-OT comparison
-        using the same week's real data, rather than comparing different weeks that happened to have or lack
-        overtime. Every day with real logged activity counts toward "Days Active" above, Saturday and Sunday
-        included — unlike the Mon–Fri-only figures above, this section isn't the Siemens proof, it's your own
-        planning number for what a day of capacity is actually worth. The in-progress current payroll week is shown
-        above but excluded from these averages.
+        Panels aren't all the same size, so the daily figures above are built from connections shipped (each panel's
+        estimate price ÷ its own $/connection), then converted back to panels at the average panel size so they line up
+        with the {hoursMix.goal?.targetPanelsPerDay ?? 8}-a-day goal. A "day" is one-fifth of the 40-hr week (8 crew-hours),
+        regardless of which weekdays or weekend days were worked, and the week resets every Wednesday at 12am. There's
+        no way to know which specific clocked hour built which specific panel, so each week's output is split across that
+        week's regular vs. overtime hours in direct proportion to how many of each were worked — an approximation, not
+        a claim that an overtime hour is exactly as productive as a regular one. Weeks with no shipped panels on record,
+        and the in-progress current week, are shown but left out of the averages.
       </p>
 
       <SectionTitle

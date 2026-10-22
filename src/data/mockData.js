@@ -1384,14 +1384,17 @@ export function computeWeekdayCapacityReport(panels, workHistory, { now = Date.n
 // capacity per employee — the weekday doesn't matter." Two things this
 // deliberately does NOT do, both on Pat's explicit instruction:
 //
-// 1. It does not restrict which days count. computeWeekdayCapacityReport
-//    exists specifically to prove a Monday-Friday figure to Siemens for an
-//    overtime-pay negotiation, so it's right that it keeps weekend output
-//    out of that average. This function answers a different, internal
-//    question — total realistic daily throughput — so every day with real
-//    logged activity counts toward the denominator here, Saturday and
-//    Sunday included.
-// 2. It does not slice by calendar day-of-week at all — it slices by LABOR
+// 1. It does not care which calendar days the work happened on.
+//    computeWeekdayCapacityReport exists specifically to prove a Monday-
+//    Friday figure to Siemens for an overtime-pay negotiation, so it keeps
+//    weekend output out of its average. This function answers a different,
+//    internal question, so a "day" here is simply 1/5 of the 40-hr week
+//    (8 crew-hours — 40 / 8 = 5 per week) no matter which weekdays or
+//    weekend days were actually worked. 8 panels/day = 40 panels/week.
+// 2. It does not count panels flat — each week's output is measured in
+//    CONNECTIONS (panels differ a lot in size: ~280 to 1,400+), then
+//    converted back to panels at the average panel size for comparison to
+//    the 8/day goal. It also doesn't slice by calendar day-of-week — it slices by LABOR
 //    HOURS: "with the crew we actually have, what do we ship on a straight
 //    40-hr week per person, versus what does overtime actually buy us on
 //    top of that." That's a sharper question than day-of-week can answer on
@@ -1461,14 +1464,31 @@ export function computeCapacityByHoursMix(panels, workHistory, clockLog, employe
     activeDayCount.set(wk, (activeDayCount.get(wk) ?? 0) + 1);
   });
 
+  // Size matters: a 600-connection panel is not the same unit of output as a
+  // 280-connection one, so a flat panel COUNT misstates capacity whenever the
+  // mix shifts. Each shipped panel's connection count is derived the same way
+  // everywhere else in the app (connectionsForPanel: estimate price / that
+  // panel's own $/connection), and every figure below is built from
+  // connections, then converted back to "panels" at the AVERAGE panel size so
+  // it's still comparable to the 8-panels-a-day goal.
+  const panelByBuildId = new Map(panels.map((p) => [p.buildId, p]));
   const shippedByWeek = new Map();
-  perBuildShipTs.forEach((t) => {
+  const connsByWeek = new Map();
+  perBuildShipTs.forEach((t, buildId) => {
     const wk = payrollWeekKey(new Date(t));
     shippedByWeek.set(wk, (shippedByWeek.get(wk) ?? 0) + 1);
+    const conns = connectionsForPanel(panelByBuildId.get(buildId), initialPricePerConnection);
+    connsByWeek.set(wk, (connsByWeek.get(wk) ?? 0) + (Number.isFinite(conns) ? conns : 0));
   });
 
   const currentWeekKey = payrollWeekKey(new Date(now));
   const allWeekKeys = new Set([...shippedByWeek.keys(), ...activeDayCount.keys()]);
+
+  // A standard "day" is 8 crew-hours of the 40-hr week (40 / 8 = 5 per week),
+  // regardless of which calendar days the work really happened on — Pat's
+  // rule is that the weekday doesn't matter, only the 40-hr week that resets
+  // every Wednesday 12am. So 8 panels/day = 40 panels per 40-hr week.
+  const STANDARD_DAYS_PER_WEEK = OVERTIME_THRESHOLD_HOURS / 8;
 
   const weeks = Array.from(allWeekKeys)
     .sort()
@@ -1486,48 +1506,96 @@ export function computeCapacityByHoursMix(panels, workHistory, clockLog, employe
       overtimeHours = Number(overtimeHours.toFixed(2));
       const totalHours = Number((regularHours + overtimeHours).toFixed(2));
       const shipped = shippedByWeek.get(wk) ?? 0;
+      const connections = connsByWeek.get(wk) ?? 0;
       const daysActive = activeDayCount.get(wk) ?? 0;
       const panelsPerHour = totalHours > 0 ? shipped / totalHours : null;
+      const connsPerHour = totalHours > 0 ? connections / totalHours : null;
       const regularAttributedPanels = panelsPerHour !== null ? panelsPerHour * regularHours : 0;
       const overtimeAttributedPanels = panelsPerHour !== null ? panelsPerHour * overtimeHours : 0;
+      const regularAttributedConns = connsPerHour !== null ? connsPerHour * regularHours : 0;
+      const overtimeAttributedConns = connsPerHour !== null ? connsPerHour * overtimeHours : 0;
       return {
         weekOf: wk,
         inProgress: wk === currentWeekKey,
+        noShipData: wk !== currentWeekKey && shipped === 0,
         shipped,
+        connections,
+        avgConnectionsPerPanel: shipped > 0 ? Math.round(connections / shipped) : null,
         daysActive,
         regularHours,
         overtimeHours,
         totalHours,
+        // Plain count: this week's shipped panels spread over the 5 standard days.
+        panelsPerDay: shipped > 0 ? Number((shipped / STANDARD_DAYS_PER_WEEK).toFixed(2)) : null,
         regularAttributedPanels: Number(regularAttributedPanels.toFixed(2)),
         overtimeAttributedPanels: Number(overtimeAttributedPanels.toFixed(2)),
+        regularAttributedConns,
+        overtimeAttributedConns,
       };
     });
 
-  const includedWeeks = weeks.filter((w) => !w.inProgress && w.daysActive > 0);
-  const totalDaysActive = includedWeeks.reduce((s, w) => s + w.daysActive, 0);
-  const totalRegularAttributed = includedWeeks.reduce((s, w) => s + w.regularAttributedPanels, 0);
-  const totalOvertimeAttributed = includedWeeks.reduce((s, w) => s + w.overtimeAttributedPanels, 0);
+  // A complete week only counts toward the averages if it actually has
+  // shipped panels on record and clocked hours — a week with hours but zero
+  // shipped panels is missing data (no Wrap logged / not loaded), not a real
+  // "0 panels" week, and averaging it in drags the daily number down (Pat: "we
+  // don't need to avg these in because it messes the numbers up"). Such weeks
+  // still appear in the table, tagged `noShipData`.
+  const includedWeeks = weeks.filter((w) => !w.inProgress && w.shipped > 0 && w.totalHours > 0);
+  const weekCount = includedWeeks.length;
+  const totalShipped = includedWeeks.reduce((s, w) => s + w.shipped, 0);
+  const totalConnections = includedWeeks.reduce((s, w) => s + w.connections, 0);
+  const totalRegularConns = includedWeeks.reduce((s, w) => s + w.regularAttributedConns, 0);
+  const totalOvertimeConns = includedWeeks.reduce((s, w) => s + w.overtimeAttributedConns, 0);
+  const totalRegularHours = includedWeeks.reduce((s, w) => s + w.regularHours, 0);
+  const totalAllHours = includedWeeks.reduce((s, w) => s + w.totalHours, 0);
   const totalOvertimeHours = Number(includedWeeks.reduce((s, w) => s + w.overtimeHours, 0).toFixed(2));
 
-  const avgPanelsPerDayAt40 =
-    totalDaysActive > 0 ? Number((totalRegularAttributed / totalDaysActive).toFixed(2)) : null;
-  const avgPanelsPerDayWithOt =
-    totalDaysActive > 0
-      ? Number(((totalRegularAttributed + totalOvertimeAttributed) / totalDaysActive).toFixed(2))
-      : null;
+  const avgConnectionsPerPanel = totalShipped > 0 ? totalConnections / totalShipped : null;
+  const totalDays = weekCount * STANDARD_DAYS_PER_WEEK;
+  const ready = totalDays > 0 && avgConnectionsPerPanel > 0;
+
+  const connectionsPerDayAt40 = ready ? totalRegularConns / totalDays : null;
+  const connectionsPerDayWithOt = ready ? (totalRegularConns + totalOvertimeConns) / totalDays : null;
+  const avgPanelsPerDayAt40 = ready ? Number((connectionsPerDayAt40 / avgConnectionsPerPanel).toFixed(2)) : null;
+  const avgPanelsPerDayWithOt = ready ? Number((connectionsPerDayWithOt / avgConnectionsPerPanel).toFixed(2)) : null;
   const otContributionPerDay =
     avgPanelsPerDayAt40 !== null && avgPanelsPerDayWithOt !== null
       ? Number((avgPanelsPerDayWithOt - avgPanelsPerDayAt40).toFixed(2))
       : null;
 
+  // The goal, in the units that actually explain the gap. At the average
+  // panel size, hitting the target panels/day means this many connections a
+  // day — and the crew's own regular hours (≈ headcount × 8 per day) only
+  // allow this many hours per panel (and per connection) to get there.
+  const targetPanelsPerDay = CAPACITY_TARGET_PER_DAY;
+  const crewHoursPerDay = weekCount > 0 ? totalRegularHours / totalDays : null;
+  const goal = ready
+    ? {
+        targetPanelsPerDay,
+        gapPanelsPerDay: Number((targetPanelsPerDay - avgPanelsPerDayAt40).toFixed(2)),
+        connectionsPerDayNeeded: Math.round(targetPanelsPerDay * avgConnectionsPerPanel),
+        connectionsPerDayActualAt40: Math.round(connectionsPerDayAt40),
+        crewHoursPerDay: Number(crewHoursPerDay.toFixed(1)),
+        // Hours the crew has per panel at the goal vs. the all-in clocked
+        // hours a shipped panel really takes today.
+        goalHoursPerPanel: Number((crewHoursPerDay / targetPanelsPerDay).toFixed(1)),
+        actualHoursPerPanel: Number((totalAllHours / totalShipped).toFixed(1)),
+        goalHoursPer100Connections: Number(((crewHoursPerDay / targetPanelsPerDay / avgConnectionsPerPanel) * 100).toFixed(1)),
+        actualHoursPer100Connections: Number(((totalAllHours / totalConnections) * 100).toFixed(1)),
+      }
+    : null;
+
   return {
     weeks: weeks.slice().sort((a, b) => (a.weekOf < b.weekOf ? 1 : a.weekOf > b.weekOf ? -1 : 0)),
-    weeksIncluded: includedWeeks.length,
-    totalDaysActive,
+    weeksIncluded: weekCount,
+    standardDaysPerWeek: STANDARD_DAYS_PER_WEEK,
     totalOvertimeHours,
+    avgConnectionsPerPanel: avgConnectionsPerPanel !== null ? Math.round(avgConnectionsPerPanel) : null,
+    connectionsPerDayAt40: connectionsPerDayAt40 !== null ? Math.round(connectionsPerDayAt40) : null,
     avgPanelsPerDayAt40,
     avgPanelsPerDayWithOt,
     otContributionPerDay,
+    goal,
   };
 }
 

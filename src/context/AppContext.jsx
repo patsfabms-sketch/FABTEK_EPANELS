@@ -377,6 +377,32 @@ function fromDbActivity(row) {
   return { id: row.id, who: row.who, action: row.action, ref: row.ref, time: "just now", kind: row.kind };
 }
 
+// Supabase/PostgREST silently caps any single select at 1,000 rows (no error,
+// just the first 1,000). work_history passed 1,000 rows in early October, and
+// from then on the app only ever loaded the NEWEST 1,000 — every older
+// session quietly vanished from payroll-adjacent math, shipped counts, P&L
+// revenue, capacity, leaderboards, etc. (a week of September showed "0
+// shipped" despite 14-32 real ships). This pages through a table 1,000 rows at
+// a time until it's all loaded, in a stable order (the tiebreak column keeps
+// rows from being skipped/duplicated between pages when the sort column has
+// ties). Returns the same { data, error } shape a plain select does.
+async function fetchAllRows(table, orderCol, ascending, tieCol = "id") {
+  const PAGE = 1000;
+  const rows = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from(table)
+      .select("*")
+      .order(orderCol, { ascending })
+      .order(tieCol, { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) return { data: null, error };
+    rows.push(...data);
+    if (data.length < PAGE) break;
+  }
+  return { data: rows, error: null };
+}
+
 function mergeUpsert(list, item, keyFn) {
   const key = keyFn(item);
   const idx = list.findIndex((x) => keyFn(x) === key);
@@ -490,11 +516,11 @@ export function AppProvider({ children }) {
         supabase.from("assemblyos_admins").select("*").order("name"),
         supabase.from("assemblyos_role_defaults").select("*"),
         supabase.from("assemblyos_settings").select("*"),
-        supabase.from("assemblyos_panels").select("*").order("created_at", { ascending: true }),
-        supabase.from("assemblyos_work_history").select("*").order("created_at", { ascending: false }),
+        fetchAllRows("assemblyos_panels", "created_at", true, "build_id"),
+        fetchAllRows("assemblyos_work_history", "created_at", false),
         supabase.from("assemblyos_active_sessions").select("*"),
         supabase.from("assemblyos_activity_feed").select("*").order("created_at", { ascending: false }).limit(300),
-        supabase.from("assemblyos_clock_log").select("*").order("clocked_in_at", { ascending: false }),
+        fetchAllRows("assemblyos_clock_log", "clocked_in_at", false),
       ]);
       if (cancelled) return;
       const [
