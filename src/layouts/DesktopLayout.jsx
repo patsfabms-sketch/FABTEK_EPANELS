@@ -3,12 +3,16 @@ import { useApp } from "../context/AppContext";
 import AdminLogin from "../pages/desktop/AdminLogin";
 import { SaveErrorBanner, LoadingScreen } from "../components/ui";
 
+// Set VITE_SANDBOX=true on the separate test site; the live site never sets it.
+export const IS_SANDBOX = import.meta.env.VITE_SANDBOX === "true";
+
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: DashboardIcon },
   { to: "/floor-status", label: "Floor Status", icon: FloorStatusIcon },
   { to: "/panels", label: "Panels", icon: PanelsIcon },
   { to: "/reports", label: "Analytics", icon: ReportsIcon },
   { to: "/capacity-report", label: "Capacity Report", icon: CapacityIcon },
+  { to: "/kits", label: "Pack-out Kits", icon: KitsIcon, sandbox: true },
   { to: "/packout-issues", label: "Packout Issues", icon: PackoutIssuesIcon },
   { to: "/team", label: "Team", icon: TeamIcon },
   { to: "/payroll", label: "Payroll", icon: PayrollIcon },
@@ -28,6 +32,11 @@ export default function DesktopLayout() {
   return (
     <div className="min-h-screen flex flex-col bg-paper-50">
       <SaveErrorBanner saveError={saveError} />
+      {IS_SANDBOX && (
+        <div className="bg-warn-500 text-white text-center text-[12px] font-semibold py-1.5 print:hidden">
+          SANDBOX / TEST SITE — the Pack-out Kits feature is being tested here. Everything else shows live shop data.
+        </div>
+      )}
       <div className="flex-1 flex min-h-0">
       <aside className="w-56 shrink-0 bg-ink-950 text-paper-100 flex flex-col print:hidden">
         <div className="px-5 py-5 flex items-center gap-2 border-b border-white/10">
@@ -55,6 +64,9 @@ export default function DesktopLayout() {
             >
               <item.icon className="w-4 h-4 shrink-0" />
               {item.label}
+              {item.sandbox && IS_SANDBOX && (
+                <span className="ml-auto rounded bg-warn-500/20 text-warn-100 text-[9px] font-bold px-1.5 py-0.5">TEST</span>
+              )}
             </NavLink>
           ))}
         </nav>
@@ -133,6 +145,14 @@ function CapacityIcon(props) {
     <svg {...iconProps(props)}>
       <path d="M4 20V10M12 20V4M20 20v-7" strokeLinecap="round" />
       <path d="M3 4.5 12 4M17 2.5l3 1.5-1.5 3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+function KitsIcon(props) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M4 8.5 12 4l8 4.5v7L12 20l-8-4.5z" strokeLinejoin="round" />
+      <path d="m8.5 12 2.5 2.5 4.5-5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

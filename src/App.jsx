@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AppProvider } from "./context/AppContext";
 import DesktopLayout from "./layouts/DesktopLayout";
@@ -16,6 +17,11 @@ import SessionLog from "./pages/desktop/SessionLog";
 import Leaderboard from "./pages/desktop/Leaderboard";
 import Panels from "./pages/desktop/Panels";
 import GetApp from "./pages/desktop/GetApp";
+// Kit pages pull in zip/PDF libraries — load them only when opened so the
+// main bundle (and every phone's startup) stays the same size.
+const Kits = lazy(() => import("./pages/desktop/Kits"));
+const KitCheck = lazy(() => import("./pages/desktop/KitCheck"));
+const kitFallback = <p className="p-8 text-sm text-ink-500">Loading…</p>;
 import Home from "./pages/mobile/Home";
 import ActiveSession from "./pages/mobile/ActiveSession";
 import History from "./pages/mobile/History";
@@ -42,6 +48,8 @@ export default function App() {
             <Route path="/leaderboard" element={<Leaderboard />} />
             <Route path="/estimates" element={<Estimates />} />
             <Route path="/panels" element={<Panels />} />
+            <Route path="/kits" element={<Suspense fallback={kitFallback}><Kits /></Suspense>} />
+            <Route path="/kit/:buildId" element={<Suspense fallback={kitFallback}><KitCheck /></Suspense>} />
             <Route path="/get-app" element={<GetApp />} />
           </Route>
 
