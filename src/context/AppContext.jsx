@@ -109,7 +109,9 @@ function toDbEmployeeFields(fields) {
 }
 
 function fromDbAdmin(row) {
-  return { id: row.id, name: row.name, username: row.username, password: !!row.has_password };
+  // canResetPins: only the admins who've been given this (currently Pat and Barry) see the
+  // Reset PIN button on an employee's profile — see resetEmployeePin below.
+  return { id: row.id, name: row.name, username: row.username, password: !!row.has_password, canResetPins: !!row.can_reset_pins };
 }
 
 const PANEL_FIELD_MAP = {
@@ -911,6 +913,29 @@ export function AppProvider({ children }) {
 
   function logout() {
     setCurrentUserId(null);
+  }
+
+  // Admin action: clear an employee's PIN so the next time they log in (type
+  // their username) the app has them choose a new 4-digit PIN, exactly like a
+  // brand-new account. Runs through a database function that re-checks the
+  // ADMIN'S PASSWORD and that this admin is allowed to reset PINs — the password
+  // is typed fresh in the confirm box, never stored in the browser. Their old
+  // PIN stops working immediately; devices already signed in stay signed in
+  // until they log out.
+  async function resetEmployeePin(employeeId, adminPassword) {
+    if (!currentAdmin?.canResetPins) return { ok: false, error: "This admin account is not allowed to reset PINs." };
+    const emp = employees.find((e) => e.id === employeeId);
+    const { data, error } = await supabase.rpc("assemblyos_reset_employee_pin", {
+      p_admin_username: currentAdmin.username,
+      p_admin_password: adminPassword,
+      p_employee_id: employeeId,
+    });
+    if (error) return { ok: false, error: "Couldn't reach the server. Check your connection and try again." };
+    const row = data?.[0];
+    if (!row?.ok) return { ok: false, error: row?.error ?? "Couldn't reset the PIN." };
+    setEmployees((prev) => prev.map((e) => (e.id === employeeId ? { ...e, hasPin: false } : e)));
+    logActivity(`reset ${emp?.name ?? "an employee"}'s PIN`, emp ? `@${emp.username}` : "", { kind: "verify" });
+    return { ok: true };
   }
 
   // ---- Panel estimates -----------------------------------------------------
@@ -1727,6 +1752,7 @@ export function AppProvider({ children }) {
     login,
     setPinAndLogin,
     logout,
+    resetEmployeePin,
     checkAdminUsername,
     adminLogin,
     setAdminPasswordAndLogin,

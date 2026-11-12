@@ -14,7 +14,7 @@ import {
   productionStages,
   ROLES,
 } from "../../data/mockData";
-import { Card, SectionTitle, StatCard, RoleBadge, Avatar, Button, Tabs, formatTimeRange } from "../../components/ui";
+import { Card, SectionTitle, StatCard, RoleBadge, Avatar, Button, Tabs, Modal, formatTimeRange } from "../../components/ui";
 import EditWorkHistoryModal from "../../components/EditWorkHistoryModal";
 import EditTeamMemberModal from "../../components/EditTeamMemberModal";
 import EditClockEntryModal from "../../components/EditClockEntryModal";
@@ -28,12 +28,13 @@ const TONE_ACCENT = {
 export default function EmployeeDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { employees, roleDefaults, workHistory, panels, clockLog, updateEmployee, reinstateEmployee } = useApp();
+  const { employees, roleDefaults, workHistory, panels, clockLog, updateEmployee, reinstateEmployee, currentAdmin, resetEmployeePin } = useApp();
 
   const employee = employees.find((e) => e.id === id);
   const [editingEntry, setEditingEntry] = useState(null);
   const [editingClockEntry, setEditingClockEntry] = useState(null);
   const [editingProfile, setEditingProfile] = useState(false);
+  const [resettingPin, setResettingPin] = useState(false);
   // Tabbed layout so this page isn't one long scroll — each tab is a
   // self-contained "folder" of sections that used to just be stacked
   // one after another. Local UI state only, resets to Overview whenever a
@@ -218,10 +219,21 @@ export default function EmployeeDetail() {
             </p>
           </div>
         </div>
-        <Button variant="ghost" onClick={() => setEditingProfile(true)}>
-          Edit Profile
-        </Button>
+        <div className="flex items-center gap-2 shrink-0">
+          {currentAdmin?.canResetPins && !employee.terminatedAt && (
+            <Button variant="ghost" onClick={() => setResettingPin(true)}>
+              Reset PIN
+            </Button>
+          )}
+          <Button variant="ghost" onClick={() => setEditingProfile(true)}>
+            Edit Profile
+          </Button>
+        </div>
       </div>
+
+      {resettingPin && (
+        <ResetPinModal employee={employee} onClose={() => setResettingPin(false)} onReset={resetEmployeePin} />
+      )}
 
       {employee.terminatedAt && (
         <div className="flex items-center justify-between gap-3 flex-wrap rounded-lg border border-bad-500/30 bg-bad-50 px-4 py-3 mb-5">
@@ -804,5 +816,83 @@ function ClockLocationBadge({ entry }) {
     >
       {flagged ? "Flagged" : "On-site"}
     </span>
+  );
+}
+
+// Reset PIN: confirms with the admin's own password, then clears the employee's
+// PIN so they pick a new one the next time they log in.
+function ResetPinModal({ employee, onClose, onReset }) {
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(false);
+
+  async function submit() {
+    if (busy || !password) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await onReset(employee.id, password);
+      if (result.ok) setDone(true);
+      else {
+        setError(result.error);
+        setPassword("");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal onClose={onClose} widthClass="max-w-[420px]">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold text-ink-900">Reset PIN — {employee.name}</h3>
+        <button onClick={onClose} className="text-ink-400 text-lg leading-none">
+          ×
+        </button>
+      </div>
+      {done ? (
+        <>
+          <p className="text-[13px] text-ink-700 mb-2">
+            Done. {employee.name.split(" ")[0]}'s old PIN no longer works.
+          </p>
+          <p className="text-[12px] text-ink-500 mb-5">
+            Next time they log in, they type their username (<span className="font-semibold">@{employee.username}</span>) and
+            the app asks them to choose a new 4-digit PIN. A phone that's already signed in stays signed in until they log out.
+          </p>
+          <div className="flex justify-end">
+            <Button onClick={onClose}>Close</Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="text-[12px] text-ink-500 mb-4">
+            This clears {employee.name.split(" ")[0]}'s PIN. When they next log in they'll be asked to set a new one. Enter
+            your own admin password to confirm.
+          </p>
+          <label className="block mb-1">
+            <span className="text-xs font-semibold text-ink-500">Your password</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+              autoFocus
+              disabled={busy}
+              className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm disabled:opacity-60"
+            />
+          </label>
+          {error && <p className="text-[11px] text-bad-600 mt-1">{error}</p>}
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="ghost" onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button onClick={submit} disabled={busy || !password}>
+              {busy ? "Resetting…" : "Reset PIN"}
+            </Button>
+          </div>
+        </>
+      )}
+    </Modal>
   );
 }
