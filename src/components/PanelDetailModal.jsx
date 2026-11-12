@@ -62,7 +62,7 @@ function formatElapsed(startedAt, now) {
 // immediately instead of only after the modal is closed and reopened.
 export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
   const navigate = useNavigate();
-  const { panels, workHistory, activeSessions, employees, pricePerConnection, adminMarkPanelSent } = useApp();
+  const { panels, workHistory, activeSessions, employees, pricePerConnection, adminMarkPanelSent, panelsOnlyConsole } = useApp();
   const [showPrint, setShowPrint] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [endingSession, setEndingSession] = useState(null);
@@ -147,28 +147,30 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
 
       <div className="flex flex-wrap gap-3 my-5">
         <StatBlock label="Connection Target" value={formatNumber(target)} />
-        <StatBlock label="Estimate" value={`$${formatNumber(panel.price)}`} />
+        {!panelsOnlyConsole && <StatBlock label="Estimate" value={`$${formatNumber(panel.price)}`} />}
         <StatBlock label="Active Now" value={active.length} />
-        <StatBlock label="Total Hours (this build)" value={thisBuildStats.hours} />
+        {!panelsOnlyConsole && <StatBlock label="Total Hours (this build)" value={thisBuildStats.hours} />}
       </div>
 
       <div className="flex items-center justify-between mb-2">
         <p className="text-[11px] font-semibold text-ink-500 uppercase tracking-wide">Details</p>
-        <button onClick={() => setShowEdit(true)} className="text-[11px] font-semibold text-brand-600 hover:text-brand-700">
-          Edit
-        </button>
+        {!panelsOnlyConsole && (
+          <button onClick={() => setShowEdit(true)} className="text-[11px] font-semibold text-brand-600 hover:text-brand-700">
+            Edit
+          </button>
+        )}
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5 text-[12px]">
         <DetailField label="Date Added" value={formatDate(panel.dateAdded)} />
         <DetailField label="Job Number" value={panel.jobNumber || "—"} />
         <DetailField
           label="PO Number"
-          value={panel.poNumber || "Not on file — click Edit to add"}
+          value={panel.poNumber || (panelsOnlyConsole ? "Not on file" : "Not on file — click Edit to add")}
           muted={!panel.poNumber}
         />
         <DetailField
           label="Serial Number"
-          value={panel.serialNumber || "Not on file — click Edit to add"}
+          value={panel.serialNumber || (panelsOnlyConsole ? "Not on file" : "Not on file — click Edit to add")}
           muted={!panel.serialNumber}
         />
         <DetailField label="Description" value={panel.order || "—"} />
@@ -185,7 +187,7 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
                 <tr className="text-left text-ink-500 border-b border-paper-100 bg-paper-50">
                   <th className="px-3 py-2 font-semibold">Job #</th>
                   <th className="px-3 py-2 font-semibold">Date</th>
-                  <th className="px-3 py-2 font-semibold text-right">Hours</th>
+                  {!panelsOnlyConsole && <th className="px-3 py-2 font-semibold text-right">Hours</th>}
                   <th className="px-3 py-2 font-semibold text-right">Connections</th>
                   <th className="px-3 py-2 font-semibold text-right">Sessions</th>
                 </tr>
@@ -206,7 +208,7 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
                         {isCurrent && <span className="text-brand-600 font-semibold"> · viewing</span>}
                       </td>
                       <td className="px-3 py-2">{formatDate(build.dateAdded)}</td>
-                      <td className="px-3 py-2 text-right">{stats.hours}</td>
+                      {!panelsOnlyConsole && <td className="px-3 py-2 text-right">{stats.hours}</td>}
                       <td className="px-3 py-2 text-right">{stats.connections || "—"}</td>
                       <td className="px-3 py-2 text-right">{stats.sessions}</td>
                     </tr>
@@ -242,12 +244,14 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
                 {formatElapsed(s.startedAt, now)} elapsed
                 {now - s.startedAt > 4 * 3600000 ? " — looks stuck?" : ""}
               </p>
-              <button
-                onClick={() => setEndingSession(s)}
-                className="text-[11px] font-semibold text-bad-600 hover:text-bad-700 mt-1.5"
-              >
-                End Session
-              </button>
+              {!panelsOnlyConsole && (
+                <button
+                  onClick={() => setEndingSession(s)}
+                  className="text-[11px] font-semibold text-bad-600 hover:text-bad-700 mt-1.5"
+                >
+                  End Session
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -263,9 +267,11 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
           {completed.map((h) => (
             <button
               key={h.id}
-              onClick={() => setEditingEntry(h)}
-              title="Click to edit this session"
-              className="flex flex-col w-full text-left text-[12px] rounded-md px-1.5 py-1 -mx-1.5 hover:bg-brand-50/60 transition-colors"
+              onClick={() => !panelsOnlyConsole && setEditingEntry(h)}
+              title={panelsOnlyConsole ? undefined : "Click to edit this session"}
+              className={`flex flex-col w-full text-left text-[12px] rounded-md px-1.5 py-1 -mx-1.5 transition-colors ${
+                panelsOnlyConsole ? "cursor-default" : "hover:bg-brand-50/60"
+              }`}
             >
               <span className="flex items-start justify-between w-full">
                 <span className="text-ink-700">
@@ -299,7 +305,7 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
       )}
 
       <div className="mt-6 pt-4 border-t border-paper-100 flex flex-wrap items-center justify-end gap-2">
-        {!sentInfo.isSent &&
+        {!sentInfo.isSent && !panelsOnlyConsole &&
           (confirmingMarkSent ? (
             <span className="flex flex-wrap items-center gap-2 text-[12px] text-ink-600 mr-auto">
               Sent on
@@ -326,7 +332,9 @@ export default function PanelDetailModal({ buildId, onClose, onSelectBuild }) {
               Mark as Sent
             </button>
           ))}
-        <ViewPdfButton panel={panel} />
+        {/* The estimate PDF is the customer quote — prices and all — so it stays
+            hidden in the panels-only console. */}
+        {!panelsOnlyConsole && <ViewPdfButton panel={panel} />}
         <Button variant="subtle" onClick={() => downloadPanelQr(panel)}>
           <DownloadIcon /> Download QR (PNG)
         </Button>

@@ -1,7 +1,10 @@
-import { NavLink, Outlet, Link } from "react-router-dom";
+import { useState } from "react";
+import { NavLink, Outlet, Link, Navigate, useLocation } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import AdminLogin from "../pages/desktop/AdminLogin";
-import { SaveErrorBanner, LoadingScreen } from "../components/ui";
+import Login from "../pages/mobile/Login";
+import { SaveErrorBanner, LoadingScreen, Button } from "../components/ui";
+import { setViewPref } from "../data/viewPref";
 
 // Set VITE_SANDBOX=true on the separate test site; the live site never sets it.
 export const IS_SANDBOX = import.meta.env.VITE_SANDBOX === "true";
@@ -9,11 +12,11 @@ export const IS_SANDBOX = import.meta.env.VITE_SANDBOX === "true";
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: DashboardIcon },
   { to: "/floor-status", label: "Floor Status", icon: FloorStatusIcon },
-  { to: "/panels", label: "Panels", icon: PanelsIcon },
+  { to: "/panels", label: "Panels", icon: PanelsIcon, panelsOnly: true },
   { to: "/reports", label: "Analytics", icon: ReportsIcon },
   { to: "/capacity-report", label: "Capacity Report", icon: CapacityIcon },
-  { to: "/kits", label: "Pack-out Kits", icon: KitsIcon, sandbox: true },
-  { to: "/packout-issues", label: "Packout Issues", icon: PackoutIssuesIcon },
+  { to: "/kits", label: "Pack-out Kits", icon: KitsIcon, sandbox: true, panelsOnly: true },
+  { to: "/packout-issues", label: "Packout Issues", icon: PackoutIssuesIcon, panelsOnly: true },
   { to: "/team", label: "Team", icon: TeamIcon },
   { to: "/payroll", label: "Payroll", icon: PayrollIcon },
   { to: "/pnl", label: "P&L", icon: PnlIcon },
@@ -23,11 +26,37 @@ const NAV = [
   { to: "/get-app", label: "Get the App", icon: GetAppIcon },
 ];
 
+// Pages a panels-only console user may open (a path matches itself or anything
+// under it). Everything else — payroll, P&L, analytics, team, estimates,
+// session log and so on — bounces back to Pack-out Kits.
+const PANELS_ONLY_PATHS = ["/panels", "/kits", "/kit", "/packout-issues"];
+
 export default function DesktopLayout() {
-  const { currentAdmin, adminLogout, saveError, ready, initialLoadFailed, retryConnection } = useApp();
+  const {
+    currentAdmin,
+    currentUser,
+    panelsOnlyConsole,
+    logout,
+    adminLogout,
+    saveError,
+    ready,
+    initialLoadFailed,
+    retryConnection,
+  } = useApp();
+  const location = useLocation();
 
   if (!ready) return <LoadingScreen connectionFailed={initialLoadFailed} onRetry={retryConnection} />;
-  if (!currentAdmin) return <AdminLogin />;
+  if (!currentAdmin && !panelsOnlyConsole) {
+    // A signed-in team member without console access: say so plainly instead
+    // of showing a manager login that can't work for them.
+    return currentUser ? <NoConsoleAccess user={currentUser} onLogout={logout} /> : <DesktopSignIn />;
+  }
+  if (panelsOnlyConsole) {
+    const allowed = PANELS_ONLY_PATHS.some((p) => location.pathname === p || location.pathname.startsWith(`${p}/`));
+    if (!allowed) return <Navigate to="/kits" replace />;
+  }
+  const navItems = panelsOnlyConsole ? NAV.filter((n) => n.panelsOnly) : NAV;
+  const displayName = panelsOnlyConsole ? currentUser.name : currentAdmin.name;
 
   return (
     <div className="min-h-screen flex flex-col bg-paper-50">
@@ -38,19 +67,19 @@ export default function DesktopLayout() {
         </div>
       )}
       <div className="flex-1 flex min-h-0">
-      <aside className="w-56 shrink-0 bg-ink-950 text-paper-100 flex flex-col print:hidden">
+      <aside className="w-48 lg:w-56 shrink-0 bg-ink-950 text-paper-100 flex flex-col print:hidden">
         <div className="px-5 py-5 flex items-center gap-2 border-b border-white/10">
           <div className="w-7 h-7 rounded-lg bg-brand-500 flex items-center justify-center font-bold text-sm">
             A
           </div>
           <div>
             <p className="text-sm font-bold leading-none">AssemblyOS</p>
-            <p className="text-[10px] text-white/40 mt-0.5">Production Console</p>
+            <p className="text-[10px] text-white/40 mt-0.5">{panelsOnlyConsole ? "Panels & Pack-outs" : "Production Console"}</p>
           </div>
         </div>
 
         <nav className="flex-1 px-3 py-4 space-y-1">
-          {NAV.map((item) => (
+          {navItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -73,14 +102,14 @@ export default function DesktopLayout() {
 
         <div className="px-4 py-4 border-t border-white/10 flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-full bg-brand-400 flex items-center justify-center text-xs font-bold shrink-0">
-            {currentAdmin.name.split(" ").map((n) => n[0]).join("")}
+            {displayName.split(" ").map((n) => n[0]).join("")}
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-semibold truncate">{currentAdmin.name}</p>
-            <p className="text-[10px] text-white/40 truncate">Production Manager</p>
+            <p className="text-xs font-semibold truncate">{displayName}</p>
+            <p className="text-[10px] text-white/40 truncate">{panelsOnlyConsole ? currentUser.role : "Production Manager"}</p>
           </div>
           <button
-            onClick={adminLogout}
+            onClick={panelsOnlyConsole ? logout : adminLogout}
             title="Log out"
             className="text-white/40 hover:text-white text-[11px] font-semibold shrink-0"
           >
@@ -89,15 +118,65 @@ export default function DesktopLayout() {
         </div>
         <Link
           to="/mobile"
+          onClick={() => setViewPref("phone")}
           className="mx-3 mb-3 flex items-center justify-center gap-1.5 rounded-lg border border-white/10 py-2 text-[11px] font-semibold text-white/60 hover:text-white hover:bg-white/5"
         >
-          <PhoneIcon className="w-3.5 h-3.5" /> View technician (mobile) app
+          <PhoneIcon className="w-3.5 h-3.5" /> {panelsOnlyConsole ? "Switch to phone view" : "View technician (mobile) app"}
         </Link>
       </aside>
 
       <main className="flex-1 min-w-0 overflow-y-auto">
         <Outlet />
       </main>
+      </div>
+    </div>
+  );
+}
+
+// Sign-in for the desktop/tablet console. Managers use their username +
+// password (AdminLogin); team members who've been given console access use the
+// same username + PIN they use on their phone.
+function DesktopSignIn() {
+  const [mode, setMode] = useState("manager");
+  if (mode === "manager") {
+    return (
+      <AdminLogin
+        footer={
+          <button onClick={() => setMode("team")} className="text-[12px] font-semibold text-brand-600 hover:text-brand-700">
+            Team member? Sign in with your PIN →
+          </button>
+        }
+      />
+    );
+  }
+  return (
+    <div className="min-h-screen bg-paper-50 flex items-center justify-center p-6">
+      <div className="w-full max-w-[380px] bg-white rounded-2xl shadow-popover pb-5">
+        <Login />
+        <div className="text-center">
+          <button onClick={() => setMode("manager")} className="text-[12px] font-semibold text-brand-600 hover:text-brand-700">
+            ← Manager sign-in
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NoConsoleAccess({ user, onLogout }) {
+  return (
+    <div className="min-h-screen bg-paper-50 flex items-center justify-center p-6">
+      <div className="w-full max-w-[380px] bg-white rounded-2xl shadow-popover p-6 text-center">
+        <h1 className="text-lg font-bold text-ink-900 mb-2">Hi {user.name.split(" ")[0]}</h1>
+        <p className="text-sm text-ink-600 mb-5">
+          Your account is set up for the phone app only. Ask a manager if you need the desktop view turned on.
+        </p>
+        <Link to="/mobile" onClick={() => setViewPref("phone")} className="block">
+          <Button className="w-full py-2.5">Open the phone app</Button>
+        </Link>
+        <Button variant="ghost" className="w-full mt-2 py-2.5" onClick={onLogout}>
+          Log Out
+        </Button>
       </div>
     </div>
   );

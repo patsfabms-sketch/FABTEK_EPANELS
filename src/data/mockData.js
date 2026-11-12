@@ -638,12 +638,35 @@ export function isClockedIn(clockLog, employeeId) {
 // or one with no location at all, is worth a manager's eyes. See
 // evaluateClockLocation below and AppContext.clockScan, which calls it.
 //
-// FabTek Industries — 19171 Hwy 51, Hazlehurst, MS 39083 (geocoded via the
-// US Census Bureau's public geocoder, which matched this address exactly).
-// If the shop ever moves, or the radius needs to change, these three
-// constants are the only thing to touch.
-export const SHOP_LOCATION = { lat: 31.921913609283, lng: -90.396000564484 };
-export const CLOCK_GEOFENCE_RADIUS_FT = 500;
+// FabTek Industries — 19171 Hwy 51, Hazlehurst, MS 39083.
+//
+// Nov 12 2026 correction: the first version of this used the US Census
+// geocoder's point for the street address. That point turned out to sit about
+// 950 ft from where people actually scan in (the building is set back from the
+// road), so with a 500 ft radius nearly every real scan was flagged. The
+// default center below is now the median of 681 real clock-in scans, and 99%
+// of those scans were within 130 ft of it (the farthest legitimate one: 179 ft).
+// The center and radius are editable by a manager from Team > "Clock-in
+// location" and stored in assemblyos_settings (key "clockGeofence"); these
+// constants are only the fallback used until/unless that setting loads.
+export const SHOP_LOCATION = { lat: 31.9200198, lng: -90.398102 };
+export const CLOCK_GEOFENCE_RADIUS_FT = 200;
+export const DEFAULT_GEOFENCE = { lat: SHOP_LOCATION.lat, lng: SHOP_LOCATION.lng, radiusFt: CLOCK_GEOFENCE_RADIUS_FT };
+
+// Accepts whatever came out of the settings table and returns a safe,
+// complete geofence ({lat, lng, radiusFt}), falling back per-field to the
+// defaults so a malformed/partial setting can never break clocking in.
+export function normalizeGeofence(raw) {
+  const lat = Number(raw?.lat);
+  const lng = Number(raw?.lng);
+  const radius = Number(raw?.radiusFt);
+  const okPoint = Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+  return {
+    lat: okPoint ? lat : DEFAULT_GEOFENCE.lat,
+    lng: okPoint ? lng : DEFAULT_GEOFENCE.lng,
+    radiusFt: Number.isFinite(radius) && radius >= 25 && radius <= 5000 ? Math.round(radius) : DEFAULT_GEOFENCE.radiusFt,
+  };
+}
 
 // Great-circle (haversine) distance between two lat/lng points, in feet.
 export function distanceFeet(lat1, lng1, lat2, lng2) {
@@ -665,16 +688,75 @@ export function distanceFeet(lat1, lng1, lat2, lng2) {
 // is flagged too — no location on file means there's nothing to confirm they
 // were on-site, which is exactly the situation review exists to catch.
 // Flagging never blocks the scan itself; see the comment above.
-export function evaluateClockLocation(coords) {
+export function evaluateClockLocation(coords, geofence = DEFAULT_GEOFENCE) {
   if (!coords || typeof coords.lat !== "number" || typeof coords.lng !== "number") {
     return { lat: null, lng: null, distanceFt: null, flagged: true };
   }
-  const distanceFt = Math.round(distanceFeet(coords.lat, coords.lng, SHOP_LOCATION.lat, SHOP_LOCATION.lng));
+  const fence = normalizeGeofence(geofence);
+  const distanceFt = Math.round(distanceFeet(coords.lat, coords.lng, fence.lat, fence.lng));
   return {
     lat: coords.lat,
     lng: coords.lng,
     distanceFt,
-    flagged: distanceFt > CLOCK_GEOFENCE_RADIUS_FT,
+    flagged: distanceFt > fence.radiusFt,
+  };
+}
+
+// Every GPS point from the clock log (clock-ins and clock-outs) within the
+// last `days` days — the raw material for calibrating the geofence.
+export function recentClockPoints(clockLog, { days = 60, now = Date.now() } = {}) {
+  const cutoff = now - days * 86400000;
+  const pts = [];
+  (clockLog ?? []).forEach((c) => {
+    if (c.clockedInAt >= cutoff) {
+      if (typeof c.inLat === "number" && typeof c.inLng === "number") pts.push({ lat: c.inLat, lng: c.inLng });
+      if (typeof c.outLat === "number" && typeof c.outLng === "number") pts.push({ lat: c.outLat, lng: c.outLng });
+    }
+  });
+  return pts;
+}
+
+function median(nums) {
+  const a = [...nums].sort((x, y) => x - y);
+  if (!a.length) return null;
+  const m = Math.floor(a.length / 2);
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+}
+
+// "Where do people actually scan in?" — the median of the scan points, after
+// throwing out anything more than `outlierFt` from the overall median (one
+// scan from a driveway across town shouldn't drag the center). Returns null
+// until there are at least `minPoints` points.
+export function recommendGeofenceCenter(points, { outlierFt = 1500, minPoints = 10 } = {}) {
+  if (!points || points.length < minPoints) return null;
+  const mLat = median(points.map((p) => p.lat));
+  const mLng = median(points.map((p) => p.lng));
+  const kept = points.filter((p) => distanceFeet(p.lat, p.lng, mLat, mLng) <= outlierFt);
+  if (kept.length < minPoints) return null;
+  return {
+    lat: Number(median(kept.map((p) => p.lat)).toFixed(7)),
+    lng: Number(median(kept.map((p) => p.lng)).toFixed(7)),
+    pointsUsed: kept.length,
+    pointsIgnored: points.length - kept.length,
+  };
+}
+
+// For a proposed center + radius: how many of those real scans would land
+// inside, and how far out the middle/90th-percentile/farthest scans are.
+// Lets a manager see "200 ft keeps 99.9% of real scans" before saving.
+export function geofenceCoverage(points, geofence) {
+  const fence = normalizeGeofence(geofence);
+  if (!points || !points.length) return { total: 0, inside: 0, pct: null, p50: null, p90: null, max: null };
+  const dists = points.map((p) => distanceFeet(p.lat, p.lng, fence.lat, fence.lng)).sort((a, b) => a - b);
+  const pick = (q) => Math.round(dists[Math.min(dists.length - 1, Math.floor(q * dists.length))]);
+  const inside = dists.filter((d) => d <= fence.radiusFt).length;
+  return {
+    total: dists.length,
+    inside,
+    pct: (inside / dists.length) * 100,
+    p50: pick(0.5),
+    p90: pick(0.9),
+    max: Math.round(dists[dists.length - 1]),
   };
 }
 

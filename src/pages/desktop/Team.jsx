@@ -16,6 +16,7 @@ import {
 } from "../../data/mockData";
 import { Card, SectionTitle, StatCard, RoleBadge, Button, Modal, Avatar, MaskedValue } from "../../components/ui";
 import EditTeamMemberModal from "../../components/EditTeamMemberModal";
+import ClockLocationModal from "../../components/ClockLocationModal";
 
 export default function Team() {
   const {
@@ -33,6 +34,7 @@ export default function Team() {
   } = useApp();
   const navigate = useNavigate();
   const [showClockQr, setShowClockQr] = useState(false);
+  const [showClockLocation, setShowClockLocation] = useState(false);
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState("clockedThisWeek");
   const [sortDir, setSortDir] = useState("desc");
@@ -146,6 +148,9 @@ export default function Team() {
           />
           <Button variant="ghost" onClick={() => setShowClockQr(true)}>
             Print This Week's Clock QR
+          </Button>
+          <Button variant="ghost" onClick={() => setShowClockLocation(true)}>
+            Clock-in location
           </Button>
           <Button onClick={() => setShowAddForm(true)}>+ Add Team Member</Button>
         </div>
@@ -447,6 +452,7 @@ export default function Team() {
       )}
 
       {showClockQr && <ClockQrModal onClose={() => setShowClockQr(false)} />}
+      {showClockLocation && <ClockLocationModal onClose={() => setShowClockLocation(false)} />}
     </div>
   );
 }

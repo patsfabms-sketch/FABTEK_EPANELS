@@ -1,8 +1,10 @@
-import { NavLink, Outlet, useNavigate, Link } from "react-router-dom";
+import { useEffect } from "react";
+import { NavLink, Outlet, useNavigate, useLocation, Link } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import Login from "../pages/mobile/Login";
 import AdminHome from "../pages/mobile/AdminHome";
 import { SaveErrorBanner, LoadingScreen } from "../components/ui";
+import { getViewPref, setViewPref } from "../data/viewPref";
 
 // No "Log Work" tab — work is logged automatically as a byproduct of
 // scanning into a panel and stopping the session (see AppContext.stopSession),
@@ -14,8 +16,19 @@ const TABS = [
 ];
 
 export default function MobileLayout() {
-  const { session, currentUser, currentAdmin, saveError, ready, initialLoadFailed, retryConnection } = useApp();
+  const { session, currentUser, currentAdmin, panelsOnlyConsole, saveError, ready, initialLoadFailed, retryConnection } = useApp();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Someone with desktop access who last used the desktop view on this device
+  // (e.g. an iPad) is taken straight back to it when the app opens on the
+  // phone-app home screen. Only the bare home route redirects, so every other
+  // phone page — and "Switch to phone view" itself — works normally.
+  useEffect(() => {
+    if (ready && panelsOnlyConsole && location.pathname === "/mobile" && getViewPref() === "desktop") {
+      navigate("/kits", { replace: true });
+    }
+  }, [ready, panelsOnlyConsole, location.pathname, navigate]);
 
   if (!ready) return <LoadingScreen connectionFailed={initialLoadFailed} onRetry={retryConnection} />;
 
@@ -40,12 +53,19 @@ export default function MobileLayout() {
             installed standalone PWA has no browser chrome of its own to
             push content down for it. */}
         <div className="sm:hidden shrink-0" style={{ height: "env(safe-area-inset-top)" }} />
-        <Link
-          to="/dashboard"
-          className="mx-5 mt-2 sm:mt-0 mb-1 shrink-0 text-[10px] font-semibold text-brand-600 hover:text-brand-700 self-start"
-        >
-          ← Manager (desktop) console
-        </Link>
+        {/* Managers (and anyone signed out, so they can reach the desktop
+            sign-in) see the console link; so do team members who've been given
+            desktop access. Regular technicians don't — it can't open anything
+            for them. */}
+        {(!currentUser || panelsOnlyConsole) && (
+          <Link
+            to={panelsOnlyConsole ? "/kits" : "/dashboard"}
+            onClick={() => setViewPref("desktop")}
+            className="mx-5 mt-2 sm:mt-0 mb-1 shrink-0 text-[10px] font-semibold text-brand-600 hover:text-brand-700 self-start"
+          >
+            {panelsOnlyConsole ? "Switch to desktop view →" : "← Manager (desktop) console"}
+          </Link>
+        )}
 
         {currentUser && session.active && (
           <button

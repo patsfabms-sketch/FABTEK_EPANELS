@@ -30,7 +30,7 @@ import PanelDetailModal from "../../components/PanelDetailModal";
 // at the top of the page still tracks who's scanned in *right now*
 // separately, for the "how many hands are on deck this second" read.
 export default function Panels() {
-  const { panels, pricePerConnection, activeSessions, employees, workHistory } = useApp();
+  const { panels, pricePerConnection, activeSessions, employees, workHistory, panelsOnlyConsole } = useApp();
   const [selectedBuildId, setSelectedBuildId] = useState(null);
   const [activeTab, setActiveTab] = useState("in-progress");
   const [query, setQuery] = useState("");
@@ -117,7 +117,9 @@ export default function Panels() {
         <div>
           <h1 className="text-xl font-bold text-ink-900">Panels</h1>
           <p className="text-sm text-ink-500 mt-1">
-            Every panel in the registry — click a panel for full details, its QR code, and its estimate
+            {panelsOnlyConsole
+              ? "Every panel in the registry — click a panel for its details and QR code"
+              : "Every panel in the registry — click a panel for full details, its QR code, and its estimate"}
           </p>
         </div>
         <span className="inline-flex items-center gap-1.5 rounded-full bg-good-50 text-good-600 text-xs font-semibold px-3 py-1.5">
@@ -214,7 +216,7 @@ function todayDateInputValue() {
 }
 
 function PanelTable({ groups, emptyText, onSelect, mode = "pipeline" }) {
-  const { adminMarkPanelSent } = useApp();
+  const { adminMarkPanelSent, panelsOnlyConsole } = useApp();
   const [confirmingBuildId, setConfirmingBuildId] = useState(null);
   const [sentDate, setSentDate] = useState(todayDateInputValue());
 
@@ -245,7 +247,7 @@ function PanelTable({ groups, emptyText, onSelect, mode = "pipeline" }) {
             <th className="px-4 py-3 font-semibold text-right">Connections</th>
             <th className="px-4 py-3 font-semibold">PO #</th>
             {mode !== "sent" && <th className="px-4 py-3 font-semibold">Status</th>}
-            {mode !== "sent" && <th className="px-4 py-3 font-semibold text-right"></th>}
+            {mode !== "sent" && !panelsOnlyConsole && <th className="px-4 py-3 font-semibold text-right"></th>}
           </tr>
         </thead>
         <tbody>
@@ -287,7 +289,7 @@ function PanelTable({ groups, emptyText, onSelect, mode = "pipeline" }) {
                   )}
                 </td>
               )}
-              {mode !== "sent" && (
+              {mode !== "sent" && !panelsOnlyConsole && (
                 <td
                   onClick={(e) => e.stopPropagation()}
                   className="px-4 py-3 whitespace-nowrap text-right"

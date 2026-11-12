@@ -14,6 +14,8 @@ import {
   connectionsPerHour,
   CONNECTIONS_PER_HOUR_REVIEW_THRESHOLD,
   evaluateClockLocation,
+  normalizeGeofence,
+  DEFAULT_GEOFENCE,
   SHIP_STAGE_LABEL,
 } from "../data/mockData";
 
@@ -70,6 +72,12 @@ function fromDbEmployee(row) {
     // hours and pay exactly as before) — they're just blocked from logging
     // in/clocking in and hidden from live-roster views via `activeEmployees`.
     terminatedAt: row.terminated_at ? new Date(row.terminated_at).getTime() : null,
+    // Which slice of the desktop/tablet console this person may use when they
+    // sign in with their normal PIN: null = none (phone app only), "panels" =
+    // Panels, Pack-out Kits and Packout Issues only, with no dollar figures or
+    // pay/hours information. A display restriction, not a security boundary —
+    // see panelsOnlyConsole below.
+    consoleAccess: row.console_access ?? null,
   };
 }
 const EMPLOYEE_FIELD_MAP = {
@@ -77,6 +85,7 @@ const EMPLOYEE_FIELD_MAP = {
   currentWeekAvg: "current_week_avg",
   photoPath: "photo_path",
   terminatedAt: "terminated_at",
+  consoleAccess: "console_access",
 };
 function toDbEmployeeInsert(emp) {
   return {
@@ -427,6 +436,9 @@ export function AppProvider({ children }) {
   const [workHistory, setWorkHistory] = useState([]);
   const [panels, setPanels] = useState([]);
   const [pricePerConnection, setPricePerConnectionState] = useState(0.75);
+  // Clock-in geofence (center + radius), editable from Team > Clock-in location.
+  // Starts at the built-in default so clocking in works before/without the setting.
+  const [clockGeofence, setClockGeofenceState] = useState(DEFAULT_GEOFENCE);
   const [activeSessions, setActiveSessions] = useState([]);
   const [clockLog, setClockLog] = useState([]);
   const [admins, setAdmins] = useState([]);
@@ -556,6 +568,8 @@ export function AppProvider({ children }) {
       }
       const priceRow = settingsRes.data.find((s) => s.key === "pricePerConnection");
       if (priceRow) setPricePerConnectionState(Number(priceRow.value));
+      const fenceRow = settingsRes.data.find((s) => s.key === "clockGeofence");
+      if (fenceRow) setClockGeofenceState(normalizeGeofence(fenceRow.value));
       setPanels(panelsRes.data.map(fromDbPanel));
       setWorkHistory(workHistoryRes.data.map(fromDbWorkHistory));
       setActiveSessions(activeSessionsRes.data.map(fromDbActiveSession));
@@ -609,6 +623,7 @@ export function AppProvider({ children }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "assemblyos_settings" }, (payload) => {
         if (payload.eventType === "DELETE") return;
         if (payload.new.key === "pricePerConnection") setPricePerConnectionState(Number(payload.new.value));
+        if (payload.new.key === "clockGeofence") setClockGeofenceState(normalizeGeofence(payload.new.value));
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "assemblyos_panels" }, (payload) => {
         if (payload.eventType === "DELETE") {
@@ -907,6 +922,20 @@ export function AppProvider({ children }) {
       .from("assemblyos_settings")
       .upsert({ key: "pricePerConnection", value: num }, { onConflict: "key" })
       .then(reportResult);
+  }
+
+  // Manager action: move/resize the clock-in geofence. Saved to the shared
+  // settings table so every device picks it up live. Only affects scans made
+  // from now on — past scans keep the flag they were given at the time.
+  function updateClockGeofence(next) {
+    const fence = normalizeGeofence(next);
+    setClockGeofenceState(fence);
+    supabase
+      .from("assemblyos_settings")
+      .upsert({ key: "clockGeofence", value: fence }, { onConflict: "key" })
+      .then(reportResult);
+    logActivity(`set the clock-in location to ${fence.radiusFt} ft around ${fence.lat.toFixed(5)}, ${fence.lng.toFixed(5)}`, "", { kind: "verify" });
+    return fence;
   }
 
   // A panel id can come back around — the same panel model built again for
@@ -1310,7 +1339,7 @@ export function AppProvider({ children }) {
     // (captured by Home.jsx right before this scan), or null if it couldn't
     // get one (denied, timed out, unsupported) — either way this always
     // resolves to a result, never throws, and never blocks the scan.
-    const inLoc = evaluateClockLocation(opts.location ?? null);
+    const inLoc = evaluateClockLocation(opts.location ?? null, clockGeofence);
 
     if (!openEntry) {
       const entry = {
@@ -1336,7 +1365,7 @@ export function AppProvider({ children }) {
     // Raw gross duration (no break subtraction) — a presence record, not a
     // "hours worked" figure; see the comment on toDbClockLog.
     const grossHours = Number(((now - openEntry.clockedInAt) / 3600000).toFixed(2));
-    const outLoc = evaluateClockLocation(opts.location ?? null);
+    const outLoc = evaluateClockLocation(opts.location ?? null, clockGeofence);
     setClockLog((prev) =>
       prev.map((c) =>
         c.id === openEntry.id
@@ -1468,6 +1497,15 @@ export function AppProvider({ children }) {
   const foundUser = employeesWithAttainment.find((e) => e.id === currentUserId) ?? null;
   const currentUser = foundUser && !foundUser.terminatedAt ? foundUser : null;
   const currentAdmin = admins.find((a) => a.id === currentAdminId) ?? null;
+
+  // Panels-only desktop/tablet console: a signed-in team member (PIN login) who
+  // a manager has granted console access, and who is NOT also signed in as an
+  // admin on this device. Everything in the console that is about money, pay
+  // or hours, and every edit/delete action, is hidden for this scope. NOTE this
+  // is a display restriction only: the database is open to every signed-in
+  // device (like the rest of the app), so it keeps things off her screen, it
+  // doesn't stop someone technical from querying the data directly.
+  const panelsOnlyConsole = !currentAdmin && currentUser?.consoleAccess === "panels";
 
   // ---- Mobile work session actions ---------------------------------------------
   // The signed-in technician's real session is mirrored into `activeSessions`
@@ -1660,6 +1698,9 @@ export function AppProvider({ children }) {
     currentUser,
     admins,
     currentAdmin,
+    panelsOnlyConsole,
+    clockGeofence,
+    updateClockGeofence,
     session,
     saveError,
     updateRoleDefault,

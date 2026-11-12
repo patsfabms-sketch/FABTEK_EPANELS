@@ -13,7 +13,7 @@ const SERVER_ERROR = "Can't reach the server. Check your connection and try agai
 // Every step here round-trips to the shared backend now (a real network
 // call, not an in-memory lookup) — `busy` guards each submit against
 // double-clicks/double-Enter while that's in flight.
-export default function AdminLogin() {
+export default function AdminLogin({ footer = null }) {
   const { checkAdminUsername, adminLogin, setAdminPasswordAndLogin } = useApp();
   const [step, setStep] = useState(STEPS.USERNAME);
   const [username, setUsername] = useState("");
@@ -185,6 +185,7 @@ export default function AdminLogin() {
             </Button>
           </div>
         )}
+        {footer && step === STEPS.USERNAME && <div className="mt-5 pt-4 border-t border-paper-100 text-center">{footer}</div>}
       </div>
     </div>
   );

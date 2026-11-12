@@ -1,6 +1,8 @@
 import { lazy, Suspense } from "react";
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
-import { AppProvider } from "./context/AppContext";
+import { AppProvider, useApp } from "./context/AppContext";
+import { LoadingScreen } from "./components/ui";
+import { getViewPref, defaultViewForScreen } from "./data/viewPref";
 import DesktopLayout from "./layouts/DesktopLayout";
 import MobileLayout from "./layouts/MobileLayout";
 import Dashboard from "./pages/desktop/Dashboard";
@@ -27,12 +29,26 @@ import ActiveSession from "./pages/mobile/ActiveSession";
 import History from "./pages/mobile/History";
 import Profile from "./pages/mobile/Profile";
 
+// "/" lands managers on the Dashboard as always. Someone with panels-only
+// console access goes to whichever view they used last on this device (phone
+// app or desktop), or — if they haven't picked yet — the one that fits the
+// screen: tablet/computer-sized gets the desktop view, phone-sized the phone app.
+function HomeRedirect() {
+  const { ready, panelsOnlyConsole } = useApp();
+  if (!ready) return <LoadingScreen />;
+  if (panelsOnlyConsole) {
+    const view = getViewPref() ?? defaultViewForScreen();
+    return <Navigate to={view === "phone" ? "/mobile" : "/kits"} replace />;
+  }
+  return <Navigate to="/dashboard" replace />;
+}
+
 export default function App() {
   return (
     <AppProvider>
       <HashRouter>
         <Routes>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/" element={<HomeRedirect />} />
 
           <Route element={<DesktopLayout />}>
             <Route path="/dashboard" element={<Dashboard />} />

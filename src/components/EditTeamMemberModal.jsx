@@ -27,6 +27,7 @@ export default function EditTeamMemberModal({ employee, onClose, onSave }) {
   const [payRate, setPayRate] = useState(String(employee.payRate ?? ""));
   const [phone, setPhone] = useState(employee.phone ?? "");
   const [email, setEmail] = useState(employee.email ?? "");
+  const [consoleAccess, setConsoleAccess] = useState(employee.consoleAccess ?? "");
   const [photoFile, setPhotoFile] = useState(null);
   const [photoPreviewUrl, setPhotoPreviewUrl] = useState(null);
   const [removePhoto, setRemovePhoto] = useState(false);
@@ -79,6 +80,7 @@ export default function EditTeamMemberModal({ employee, onClose, onSave }) {
       phone: phone.trim(),
       email: email.trim(),
       photoPath,
+      consoleAccess: consoleAccess || null,
     });
 
     // Best-effort cleanup of whatever photo this replaced/removed — fire
@@ -149,6 +151,24 @@ export default function EditTeamMemberModal({ employee, onClose, onSave }) {
             </option>
           ))}
         </select>
+      </label>
+
+      <label className="block mb-3">
+        <span className="text-xs font-semibold text-ink-500">Desktop / tablet access</span>
+        <select
+          value={consoleAccess}
+          onChange={(e) => setConsoleAccess(e.target.value)}
+          className="mt-1 w-full rounded-lg border border-paper-200 px-3 py-2 text-sm bg-white"
+        >
+          <option value="">Phone app only</option>
+          <option value="panels">Panels &amp; pack-outs only (desktop / tablet, no dollars or hours)</option>
+        </select>
+        {consoleAccess === "panels" && (
+          <span className="block mt-1 text-[11px] text-ink-500">
+            They sign in on the desktop page with the same username + PIN as their phone and see only Panels, Pack-out
+            Kits and Packout Issues.
+          </span>
+        )}
       </label>
 
       <label className="block mb-3">
