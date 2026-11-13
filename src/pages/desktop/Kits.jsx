@@ -4,11 +4,12 @@ import { useApp } from "../../context/AppContext";
 import { Card, SectionTitle, Button, formatDateTime } from "../../components/ui";
 import KitUploadModal from "../../components/KitUploadModal";
 import KitDeleteModal from "../../components/KitDeleteModal";
-import { deleteKit, useKitList } from "../../data/kitStore";
+import { deleteKit, fetchOutstandingLines, useKitList } from "../../data/kitStore";
+import { buildDailyStatusModel, dailyReportFileName } from "../../data/kitDailyReport";
 
 // Pack-out Kits (SANDBOX) — one row per Siemens kit that's been uploaded.
 export default function Kits() {
-  const { panels } = useApp();
+  const { panels, workHistory, activeSessions } = useApp();
   const { kits, loading, error, reload } = useKitList();
   const [deleting, setDeleting] = useState(null);
   const navigate = useNavigate();
@@ -16,6 +17,25 @@ export default function Kits() {
   const [search, setSearch] = useState("");
   const [dropFile, setDropFile] = useState(null);
   const [dragging, setDragging] = useState(false);
+  const [reporting, setReporting] = useState(false);
+  const [reportError, setReportError] = useState("");
+
+  // Daily status PDF for Siemens: counts + lists built from live data at the
+  // moment of the click, so it's always "as of now".
+  async function downloadDailyReport() {
+    setReporting(true);
+    setReportError("");
+    try {
+      const [outstanding, { buildDailyReportPdf }] = await Promise.all([fetchOutstandingLines(), import("../../data/kitDailyPdf")]);
+      const now = new Date();
+      const model = buildDailyStatusModel({ kits, panels, workHistory, activeSessions, outstanding, now });
+      buildDailyReportPdf(model).save(dailyReportFileName(now));
+    } catch (e) {
+      setReportError(e?.message || String(e));
+    } finally {
+      setReporting(false);
+    }
+  }
 
   const panelByBuild = useMemo(() => new Map(panels.map((p) => [p.buildId, p])), [panels]);
   const existing = useMemo(() => new Set(kits.map((k) => k.buildId)), [kits]);
@@ -56,7 +76,14 @@ export default function Kits() {
       <SectionTitle
         title="Pack-out Kits"
         subtitle="Verify each Siemens kit against its parts list, report what's missing, and log it when it arrives."
-        action={<Button onClick={() => setShowUpload(true)}>+ Add kit (zip)</Button>}
+        action={
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" onClick={downloadDailyReport} disabled={reporting || loading || kits.length === 0}>
+              {reporting ? "Building…" : "Daily report (PDF)"}
+            </Button>
+            <Button onClick={() => setShowUpload(true)}>+ Add kit (zip)</Button>
+          </div>
+        }
       />
       <input
         value={search}
@@ -65,6 +92,7 @@ export default function Kits() {
         className="w-full max-w-sm rounded-lg border border-paper-200 px-3 py-2 text-[13px] mb-4"
       />
       {error && <p className="text-sm text-bad-600 mb-3">Couldn't load kits: {error}</p>}
+      {reportError && <p className="text-sm text-bad-600 mb-3">Couldn't build the daily report: {reportError}</p>}
       <Card padded={false}>
         {loading ? (
           <p className="p-8 text-sm text-ink-500 text-center">Loading…</p>

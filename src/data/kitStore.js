@@ -159,6 +159,26 @@ export async function fetchKits() {
   });
 }
 
+// Every missing / short part across ALL kits — feeds the "parts we still need"
+// section of the daily Siemens report. Paged past the 1,000-row cap.
+export async function fetchOutstandingLines() {
+  const out = [];
+  for (let from = 0; ; from += 1000) {
+    const rows = must(
+      await supabase
+        .from("assemblyos_kit_lines")
+        .select("*")
+        .eq("included", true)
+        .in("status", ["missing", "short"])
+        .order("id", { ascending: true })
+        .range(from, from + 999)
+    );
+    out.push(...rows.map(fromDbLine));
+    if (rows.length < 1000) break;
+  }
+  return out;
+}
+
 // Lines for one kit, past Supabase's 1,000-row cap (a kit is ~100-200, but
 // never assume).
 async function fetchAll(table, buildId, orderCol) {
