@@ -375,6 +375,59 @@ export function findPanelsForKit(panels, panelId) {
 }
 
 // ---------------------------------------------------------------------------
+// Picking the panels a kit belongs to
+// ---------------------------------------------------------------------------
+
+// A job's RFQ number: "1101721-3" (unit 3 of a multi-unit job) -> "1101721".
+export const rfqOf = (panel) => (panel.unitCount ? String(panel.id).replace(/-\d+$/, "") : String(panel.id));
+
+/**
+ * One group per RFQ, each with its unit panels in order — the list the person
+ * flips through when tagging a kit ("1101721 EQISALES · 4 units"). `panels`
+ * should already be one build per panel id. Newest jobs first.
+ */
+export function groupPanelsByRfq(panels) {
+  const groups = new Map();
+  for (const p of panels) {
+    const rfq = rfqOf(p);
+    if (!groups.has(rfq)) groups.set(rfq, { rfq, units: [] });
+    groups.get(rfq).units.push(p);
+  }
+  const out = [...groups.values()].map((g) => {
+    g.units.sort((a, b) => (a.unitIndex ?? 0) - (b.unitIndex ?? 0) || String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
+    const first = g.units[0];
+    return {
+      rfq: g.rfq,
+      customer: first.customer || "",
+      jobNumber: first.jobNumber || "",
+      dateAdded: g.units.reduce((m, u) => (String(u.dateAdded || "") > m ? String(u.dateAdded || "") : m), ""),
+      units: g.units,
+    };
+  });
+  return out.sort((a, b) => b.dateAdded.localeCompare(a.dateAdded) || b.rfq.localeCompare(a.rfq, undefined, { numeric: true }));
+}
+
+/**
+ * Which RFQs this kit most likely belongs to, so they come ticked and on top:
+ * the RFQ in the zip's file name, plus any panel that already has a kit with
+ * the same Siemens sales order + item (a re-sent BOM for the same job).
+ */
+export function suggestRfqs({ nameInfo, meta, kits, panels }) {
+  const out = new Set();
+  if (nameInfo?.panelId) findPanelsForKit(panels, nameInfo.panelId).forEach((p) => out.add(rfqOf(p)));
+  if (meta?.so) {
+    const byBuild = new Map(panels.map((p) => [p.buildId, p]));
+    for (const k of kits) {
+      if (k.soNumber === meta.so && String(k.itemNumber) === String(meta.item)) {
+        const p = byBuild.get(k.buildId);
+        if (p) out.add(rfqOf(p));
+      }
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Checking, receiving, undoing — all pure "line in -> line out"
 // ---------------------------------------------------------------------------
 

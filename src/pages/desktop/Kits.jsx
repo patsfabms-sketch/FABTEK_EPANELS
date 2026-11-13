@@ -7,7 +7,7 @@ import KitDeleteModal from "../../components/KitDeleteModal";
 import { deleteKit, fetchOutstandingLines, setKitShipped, useKitList } from "../../data/kitStore";
 import { buildDailyStatusModel, dailyReportFileName } from "../../data/kitDailyReport";
 
-// Pack-out Kits (SANDBOX) — one row per Siemens kit that's been uploaded.
+// Pack-out Kits — one row per Siemens kit that's been uploaded.
 export default function Kits() {
   const { panels, workHistory, activeSessions, currentAdmin, currentUser } = useApp();
   const { kits, loading, error, reload } = useKitList();
@@ -51,7 +51,6 @@ export default function Kits() {
   }
 
   const panelByBuild = useMemo(() => new Map(panels.map((p) => [p.buildId, p])), [panels]);
-  const existing = useMemo(() => new Set(kits.map((k) => k.buildId)), [kits]);
   const shippedCount = kits.filter((k) => k.shippedAt).length;
   const shown = kits.filter((k) => {
     if (!showShipped && k.shippedAt) return false;
@@ -96,7 +95,7 @@ export default function Kits() {
             <Button variant="ghost" onClick={downloadDailyReport} disabled={reporting || loading || kits.length === 0}>
               {reporting ? "Building…" : "Daily report (PDF)"}
             </Button>
-            <Button onClick={() => setShowUpload(true)}>+ Add kit (zip)</Button>
+            <Button onClick={() => setShowUpload(true)}>+ Add kit</Button>
           </div>
         }
       />
@@ -210,16 +209,17 @@ export default function Kits() {
       )}
       {showUpload && (
         <KitUploadModal
-          existingBuildIds={existing}
+          existingKits={kits}
           initialFiles={dropFile}
           onClose={() => {
             setShowUpload(false);
             setDropFile(null);
           }}
-          onDone={(buildId) => {
+          onDone={(buildIds) => {
             setShowUpload(false);
             setDropFile(null);
-            navigate(`/kit/${buildId}`);
+            reload();
+            if (buildIds.length === 1) navigate(`/kit/${buildIds[0]}`);
           }}
         />
       )}
