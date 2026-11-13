@@ -317,17 +317,21 @@ export function parseKitZipName(fileName) {
   return { so: m[1], item: m[2], panelId: m[3], customer: (m[4] || "").replace(/_/g, " ") };
 }
 
-// What each file inside the zip is. Everything else (Thumbs.db, plot logs,
-// macOS resource forks) is ignored.
-export function classifyZipEntry(path) {
+// What each file in an upload is. In a zip, junk (Thumbs.db, plot logs, macOS
+// resource forks, Office lock files) is ignored and only well-known document
+// types are kept as "other"; a loose file the person picked on purpose is kept
+// whatever it is (`keepUnknown`).
+const KEEP_OTHER_EXT = new Set(["doc", "docx", "xlsm", "txt", "png", "jpg", "jpeg", "dwg", "step", "stp", "ppt", "pptx"]);
+export function classifyZipEntry(path, { keepUnknown = false } = {}) {
   const name = String(path ?? "").split(/[\\/]/).pop();
-  if (!name || name.startsWith(".") || /^thumbs\.db$/i.test(name)) return "ignore";
+  if (!name || name.startsWith(".") || name.startsWith("~$") || /^(thumbs\.db|desktop\.ini)$/i.test(name)) return "ignore";
   if (/(^|\/)__MACOSX\//.test(path)) return "ignore";
   const ext = (name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase();
   if (ext === "csv") return "bom";
   if (ext === "pdf") return "drawing";
-  if (ext === "dxf") return "dxf"; // converted to a PDF drawing when the zip is read (see kitZip.js)
+  if (ext === "dxf") return "dxf"; // converted to a PDF drawing when the upload is read (see kitZip.js)
   if (ext === "xlsx" || ext === "xls") return "wirelist";
+  if (keepUnknown || KEEP_OTHER_EXT.has(ext)) return "other";
   return "ignore";
 }
 

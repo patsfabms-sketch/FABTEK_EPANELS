@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
 import { Button, Card, Modal, Tabs, formatDateTime } from "../../components/ui";
 import KitPrints from "../../components/KitPrints";
 import KitDeleteModal from "../../components/KitDeleteModal";
 import {
+  addKitFiles,
   addMarker,
   applyLineAction,
   deleteKit,
@@ -12,6 +13,7 @@ import {
   markAllOutstandingReceived,
   markAllPendingGot,
   recordReportGenerated,
+  removeKitFile,
   removeMarker,
   saveLineNote,
   setLineIncluded,
@@ -30,6 +32,7 @@ import {
 } from "../../data/kitData";
 import { downloadBlob, downloadReportCsv, downloadReportPdf } from "../../data/kitReport";
 import { buildMarkedBomPdf } from "../../data/kitBomPdf";
+import { readExtraFiles } from "../../data/kitZip";
 import { parseBom } from "../../data/kitData";
 
 const STATUS_STYLE = {
@@ -358,6 +361,10 @@ export default function KitCheck() {
           files={files}
           events={events}
           lines={lines}
+          buildId={buildId}
+          topDescription={kit.topDescription}
+          by={by}
+          onChanged={reload}
           onDelete={() => setShowDelete(true)}
         />
       )}
@@ -836,10 +843,18 @@ const ACTION_LABEL = {
   upload: "Kit uploaded",
 };
 
-function FilesTab({ files, events, lines, onDelete }) {
+const fmtSize = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`);
+
+function FilesTab({ files, events, lines, buildId, topDescription, by, onChanged, onDelete }) {
   const byId = new Map(lines.map((l) => [l.id, l]));
   const recent = [...events].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, 80);
   const [busyId, setBusyId] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [msg, setMsg] = useState(null); // { ok, lines: [] }
+  const [confirmId, setConfirmId] = useState(null);
+  const inputRef = useRef(null);
+
   async function download(f) {
     setBusyId(f.id);
     try {
@@ -848,20 +863,107 @@ function FilesTab({ files, events, lines, onDelete }) {
       setBusyId(null);
     }
   }
+
+  async function addFiles(fileList) {
+    const list = [...(fileList || [])];
+    if (!list.length) return;
+    setAdding(true);
+    setMsg(null);
+    try {
+      const prepared = await readExtraFiles(list, { topDescription });
+      const { added, replaced } = prepared.files.length ? await addKitFiles({ buildId, files: prepared.files, by }) : { added: 0, replaced: 0 };
+      const out = [];
+      if (added) out.push(`Added ${added} file${added === 1 ? "" : "s"}.`);
+      if (replaced) out.push(`Replaced ${replaced} file${replaced === 1 ? "" : "s"} that already had the same name.`);
+      if (prepared.converted.length) out.push(`Converted ${prepared.converted.map((c) => c.from).join(", ")} to PDF — it's in Prints now.`);
+      if (prepared.files.some((f) => f.kind === "drawing")) out.push("PDF drawings show up in the Prints tab.");
+      setMsg({ ok: prepared.files.length > 0, lines: [...out, ...prepared.warnings] });
+      await onChanged();
+    } catch (e) {
+      setMsg({ ok: false, lines: [e.message || String(e)] });
+    } finally {
+      setAdding(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  }
+
+  async function remove(f) {
+    setBusyId(f.id);
+    try {
+      await removeKitFile(f);
+      setConfirmId(null);
+      await onChanged();
+    } catch (e) {
+      setMsg({ ok: false, lines: [`Couldn't remove ${f.fileName}: ${e.message || e}`] });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <Card>
-        <h3 className="text-[15px] font-semibold text-ink-900 mb-2">Files from Siemens</h3>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-[15px] font-semibold text-ink-900">Files for this kit</h3>
+          <Button variant="ghost" disabled={adding} onClick={() => inputRef.current?.click()}>
+            {adding ? "Adding…" : "+ Add files"}
+          </Button>
+        </div>
+        <input ref={inputRef} type="file" multiple className="hidden" onChange={(e) => addFiles(e.target.files)} />
+        <label
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            if (!adding) addFiles(e.dataTransfer.files);
+          }}
+          onClick={(e) => {
+            e.preventDefault();
+            if (!adding) inputRef.current?.click();
+          }}
+          className={`block border-2 border-dashed rounded-lg px-4 py-3 mb-3 text-center text-[12px] cursor-pointer ${dragOver ? "border-brand-500 bg-brand-50 text-brand-600" : "border-paper-200 text-ink-500"}`}
+        >
+          Drop PDFs, Excel, DXFs, a zip, or any other files here to add them to this kit
+        </label>
+        {msg && (
+          <div className={`text-[12px] rounded-lg p-2.5 mb-3 space-y-0.5 ${msg.ok ? "bg-good-50 text-good-600" : "bg-warn-50 text-warn-600"}`}>
+            {msg.lines.map((l) => (
+              <p key={l}>{l}</p>
+            ))}
+          </div>
+        )}
         <ul className="divide-y divide-paper-100">
           {files.map((f) => (
-            <li key={f.id} className="flex items-center justify-between py-2 text-[13px]">
-              <span>
+            <li key={f.id} className="flex items-center justify-between gap-3 py-2 text-[13px]">
+              <span className="min-w-0 truncate">
                 <span className="text-[10px] uppercase font-bold text-ink-400 mr-2">{f.kind}</span>
                 {f.fileName}
+                <span className="text-[11px] text-ink-400 ml-2">{fmtSize(f.sizeBytes)}</span>
               </span>
-              <Button variant="ghost" disabled={busyId === f.id} onClick={() => download(f)}>
-                Download
-              </Button>
+              <span className="flex items-center gap-2 shrink-0">
+                <Button variant="ghost" disabled={busyId === f.id} onClick={() => download(f)}>
+                  Download
+                </Button>
+                {f.kind !== "bom" &&
+                  (confirmId === f.id ? (
+                    <>
+                      <Button variant="danger" disabled={busyId === f.id} onClick={() => remove(f)}>
+                        {f.kind === "drawing" ? "Remove (and its pins)" : "Remove"}
+                      </Button>
+                      <Button variant="ghost" onClick={() => setConfirmId(null)}>
+                        Cancel
+                      </Button>
+                    </>
+                  ) : (
+                    <Button variant="ghost" onClick={() => setConfirmId(f.id)}>
+                      Remove
+                    </Button>
+                  ))}
+              </span>
             </li>
           ))}
         </ul>

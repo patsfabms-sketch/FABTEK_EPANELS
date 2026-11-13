@@ -1,15 +1,15 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
-import { Card, SectionTitle, Button, formatDateTime } from "../../components/ui";
+import { Card, SectionTitle, Button, formatDate, formatDateTime } from "../../components/ui";
 import KitUploadModal from "../../components/KitUploadModal";
 import KitDeleteModal from "../../components/KitDeleteModal";
-import { deleteKit, fetchOutstandingLines, useKitList } from "../../data/kitStore";
+import { deleteKit, fetchOutstandingLines, setKitShipped, useKitList } from "../../data/kitStore";
 import { buildDailyStatusModel, dailyReportFileName } from "../../data/kitDailyReport";
 
 // Pack-out Kits (SANDBOX) — one row per Siemens kit that's been uploaded.
 export default function Kits() {
-  const { panels, workHistory, activeSessions } = useApp();
+  const { panels, workHistory, activeSessions, currentAdmin, currentUser } = useApp();
   const { kits, loading, error, reload } = useKitList();
   const [deleting, setDeleting] = useState(null);
   const navigate = useNavigate();
@@ -19,6 +19,19 @@ export default function Kits() {
   const [dragging, setDragging] = useState(false);
   const [reporting, setReporting] = useState(false);
   const [reportError, setReportError] = useState("");
+  const [showShipped, setShowShipped] = useState(false);
+  const [shipError, setShipError] = useState("");
+  const by = currentAdmin?.name ?? currentUser?.name ?? "Manager";
+
+  async function toggleShipped(kit) {
+    setShipError("");
+    try {
+      await setKitShipped(kit.buildId, !kit.shippedAt, by);
+      reload();
+    } catch (e) {
+      setShipError(e?.message || String(e));
+    }
+  }
 
   // Daily status PDF for Siemens: counts + lists built from live data at the
   // moment of the click, so it's always "as of now".
@@ -39,7 +52,9 @@ export default function Kits() {
 
   const panelByBuild = useMemo(() => new Map(panels.map((p) => [p.buildId, p])), [panels]);
   const existing = useMemo(() => new Set(kits.map((k) => k.buildId)), [kits]);
+  const shippedCount = kits.filter((k) => k.shippedAt).length;
   const shown = kits.filter((k) => {
+    if (!showShipped && k.shippedAt) return false;
     const q = search.trim().toLowerCase();
     if (!q) return true;
     const p = panelByBuild.get(k.buildId);
@@ -61,16 +76,16 @@ export default function Kits() {
       onDrop={(e) => {
         e.preventDefault();
         setDragging(false);
-        const f = [...e.dataTransfer.files].find((x) => /\.zip$/i.test(x.name)) || e.dataTransfer.files[0];
-        if (f) {
-          setDropFile(f);
+        const fs = [...e.dataTransfer.files];
+        if (fs.length) {
+          setDropFile(fs);
           setShowUpload(true);
         }
       }}
     >
       {dragging && (
         <div className="absolute inset-0 z-20 rounded-xl border-4 border-dashed border-brand-500 bg-brand-50/90 flex items-center justify-center pointer-events-none">
-          <p className="text-xl font-bold text-brand-600">Drop the Siemens zip anywhere to add it</p>
+          <p className="text-xl font-bold text-brand-600">Drop the Siemens zip or files anywhere to add them</p>
         </div>
       )}
       <SectionTitle
@@ -91,13 +106,20 @@ export default function Kits() {
         placeholder="Search panel, SO, part…"
         className="w-full max-w-sm rounded-lg border border-paper-200 px-3 py-2 text-[13px] mb-4"
       />
+      {shippedCount > 0 && (
+        <label className="inline-flex items-center gap-2 text-[13px] text-ink-700 mb-4 ml-4 cursor-pointer select-none">
+          <input type="checkbox" checked={showShipped} onChange={(e) => setShowShipped(e.target.checked)} />
+          Show shipped kits ({shippedCount})
+        </label>
+      )}
+      {shipError && <p className="text-sm text-bad-600 mb-3">Couldn't update the kit: {shipError}</p>}
       {error && <p className="text-sm text-bad-600 mb-3">Couldn't load kits: {error}</p>}
       {reportError && <p className="text-sm text-bad-600 mb-3">Couldn't build the daily report: {reportError}</p>}
       <Card padded={false}>
         {loading ? (
           <p className="p-8 text-sm text-ink-500 text-center">Loading…</p>
         ) : shown.length === 0 ? (
-          <p className="p-8 text-sm text-ink-500 text-center">{kits.length ? "No kits match that search." : "No kits yet — add the Siemens zip for a panel to get started."}</p>
+          <p className="p-8 text-sm text-ink-500 text-center">{kits.length ? (shippedCount === kits.length && !showShipped ? "Every kit has been marked shipped." : "No kits match that search.") : "No kits yet — add the Siemens zip for a panel to get started."}</p>
         ) : (
           <table className="w-full text-[13px]">
             <thead>
@@ -120,7 +142,10 @@ export default function Kits() {
                 return (
                   <tr key={k.buildId} onClick={() => navigate(`/kit/${k.buildId}`)} className="border-b border-paper-100 hover:bg-paper-50 cursor-pointer">
                     <td className="px-4 py-3">
-                      <p className="font-semibold text-ink-900">Panel {k.panelId}</p>
+                      <p className="font-semibold text-ink-900">
+                        Panel {k.panelId}
+                        {k.shippedAt && <span className="ml-2 inline-flex rounded-full bg-paper-100 text-ink-600 text-[11px] font-bold px-2 py-0.5">Shipped {formatDate(k.shippedAt)}</span>}
+                      </p>
                       <p className="text-[11px] text-ink-500">{[p?.jobNumber && `Job ${p.jobNumber}`, p?.customer].filter(Boolean).join(" · ")}</p>
                     </td>
                     <td className="px-4 py-3">
@@ -145,7 +170,16 @@ export default function Kits() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-ink-500">{formatDateTime(k.uploadedAt)}</td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleShipped(k);
+                        }}
+                        className="mr-2 rounded-lg border border-paper-200 px-3 py-2 text-[12px] font-semibold text-ink-700 hover:bg-paper-100 [touch-action:manipulation]"
+                      >
+                        {k.shippedAt ? "Undo shipped" : "Mark shipped"}
+                      </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -177,7 +211,7 @@ export default function Kits() {
       {showUpload && (
         <KitUploadModal
           existingBuildIds={existing}
-          initialFile={dropFile}
+          initialFiles={dropFile}
           onClose={() => {
             setShowUpload(false);
             setDropFile(null);

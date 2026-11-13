@@ -33,6 +33,8 @@ export const fromDbKit = (r) => ({
   uploadedAt: r.uploaded_at,
   reportLastGeneratedAt: r.report_last_generated_at ?? null,
   reportCount: r.report_count ?? 0,
+  shippedAt: r.shipped_at ?? null,
+  shippedBy: r.shipped_by ?? "",
 });
 
 export const fromDbLine = (r) => ({
@@ -282,6 +284,68 @@ export async function createKit({ buildId, panelId, parsed, sourceFileName, uplo
   }
 }
 
+/**
+ * Add files to a kit that already exists (drawings, Excel, PDFs, anything).
+ * `files` = [{ kind, fileName, blob, contentType }]. A file with the same name
+ * as one already on the kit REPLACES its contents in place (same row, same
+ * storage path), so pins already placed on a re-sent drawing are kept.
+ * Returns { added, replaced }.
+ */
+export async function addKitFiles({ buildId, files, by }) {
+  const existing = must(await supabase.from("assemblyos_kit_files").select("*").eq("build_id", buildId));
+  const byName = new Map(existing.map((f) => [String(f.file_name).toLowerCase(), f]));
+  let order = existing.reduce((m, f) => Math.max(m, f.sort_order ?? 0), 0);
+  let added = 0;
+  let replaced = 0;
+  const stamp = Date.now().toString(36);
+  for (const f of files) {
+    const prior = byName.get(f.fileName.toLowerCase());
+    if (prior) {
+      const up = await supabase.storage.from(KIT_BUCKET).upload(prior.storage_path, f.blob, { upsert: true, contentType: f.contentType || undefined });
+      if (up.error) throw up.error;
+      must(await supabase.from("assemblyos_kit_files").update({ size_bytes: f.blob.size }).eq("id", prior.id));
+      replaced += 1;
+      continue;
+    }
+    order += 1;
+    const safe = f.fileName.replace(/[^A-Za-z0-9._-]+/g, "_");
+    const path = `${buildId}/${stamp}-${order}-${safe}`;
+    const up = await supabase.storage.from(KIT_BUCKET).upload(path, f.blob, { upsert: true, contentType: f.contentType || undefined });
+    if (up.error) throw up.error;
+    try {
+      must(
+        await supabase.from("assemblyos_kit_files").insert({
+          build_id: buildId,
+          kind: f.kind,
+          file_name: f.fileName,
+          storage_path: path,
+          size_bytes: f.blob.size,
+          sort_order: order,
+        })
+      );
+    } catch (err) {
+      await supabase.storage.from(KIT_BUCKET).remove([path]);
+      throw err;
+    }
+    added += 1;
+  }
+  must(
+    await supabase.from("assemblyos_kit_events").insert({
+      build_id: buildId,
+      action: "upload",
+      by_name: by,
+      note: `Added ${files.map((f) => f.fileName).slice(0, 3).join(", ")}${files.length > 3 ? ` and ${files.length - 3} more` : ""}`,
+    })
+  );
+  return { added, replaced };
+}
+
+// Take one file off a kit (not the BOM). Pins placed on a drawing go with it.
+export async function removeKitFile(file) {
+  must(await supabase.from("assemblyos_kit_files").delete().eq("id", file.id));
+  await supabase.storage.from(KIT_BUCKET).remove([file.storagePath]);
+}
+
 export async function deleteKit(buildId) {
   const { data: files } = await supabase.from("assemblyos_kit_files").select("storage_path").eq("build_id", buildId);
   if (files?.length) await supabase.storage.from(KIT_BUCKET).remove(files.map((f) => f.storage_path));
@@ -406,6 +470,17 @@ export async function undoLast(events, lines) {
   }
   must(await supabase.from("assemblyos_kit_events").update({ undone_at: new Date().toISOString() }).in("id", batch.map((e) => e.id)));
   return batch.length;
+}
+
+// Mark a kit shipped (drops it from the daily Siemens report and the default
+// kit list) or put it back. Nothing is deleted either way.
+export async function setKitShipped(buildId, shipped, by) {
+  must(
+    await supabase
+      .from("assemblyos_kits")
+      .update(shipped ? { shipped_at: new Date().toISOString(), shipped_by: by || null } : { shipped_at: null, shipped_by: null })
+      .eq("build_id", buildId)
+  );
 }
 
 export async function recordReportGenerated(buildId, by, format, kit) {

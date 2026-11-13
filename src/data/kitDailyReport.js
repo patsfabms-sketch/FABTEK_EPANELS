@@ -21,13 +21,16 @@ import { sentInfoForBuild } from "./mockData.js";
 export const GROUP = { READY: "ready", PROGRESS: "progress", WAITING: "waiting" };
 
 /**
- * kits         from fetchKits() (each has counts {total,pending,got,missing,short,received})
+ * kits         from fetchKits() (each has counts {total,pending,got,missing,short,received});
+ *              kits with shippedAt set are left out
  * panels       app panels (buildId, id, jobNumber …)
  * workHistory  completed sessions
  * activeSessions  sessions in progress right now
  * outstanding  missing/short lines across all kits (fetchOutstandingLines()), optional
  */
-export function buildDailyStatusModel({ kits, panels, workHistory, activeSessions = [], outstanding = [], now = new Date() }) {
+export function buildDailyStatusModel({ kits: allKits, panels, workHistory, activeSessions = [], outstanding = [], now = new Date() }) {
+  // A kit marked Shipped is out the door: it isn't "on hand" any more.
+  const kits = allKits.filter((k) => !k.shippedAt);
   const panelByBuild = new Map(panels.map((p) => [p.buildId, p]));
   const touched = new Set();
   for (const h of workHistory) touched.add(h.buildId);

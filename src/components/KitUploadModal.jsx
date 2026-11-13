@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../context/AppContext";
 import { Modal, Button } from "./ui";
-import { readKitZip } from "../data/kitZip";
+import { readKitUpload } from "../data/kitZip";
 import { createKit } from "../data/kitStore";
 import { findPanelsForKit, formatQty } from "../data/kitData";
 
 // Upload a Siemens kit zip: read it, show what was found, let the user
 // confirm which panel it belongs to, then save it to the kit tables.
-export default function KitUploadModal({ onClose, onDone, existingBuildIds, initialFile = null }) {
+export default function KitUploadModal({ onClose, onDone, existingBuildIds, initialFile = null, initialFiles = null }) {
   const { panels, currentAdmin } = useApp();
   const [stage, setStage] = useState("pick"); // pick | reading | review | saving
   const [error, setError] = useState(null);
@@ -26,31 +26,23 @@ export default function KitUploadModal({ onClose, onDone, existingBuildIds, init
       .slice(0, 8);
   }, [panels, search]);
 
-  // A zip dropped onto the Kits page arrives here already chosen.
+  // Files dropped onto the Kits page arrive here already chosen.
   useEffect(() => {
-    if (initialFile && !startedRef.current) {
+    const first = initialFiles?.length ? initialFiles : initialFile ? [initialFile] : null;
+    if (first && !startedRef.current) {
       startedRef.current = true;
-      onFile(initialFile);
+      onFiles(first);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialFile]);
+  }, [initialFile, initialFiles]);
 
-  function pickFromDrop(fileList) {
+  async function onFiles(fileList) {
     const files = [...(fileList || [])];
-    const zip = files.find((f) => /\.zip$/i.test(f.name));
-    if (!zip) {
-      setError(files.length ? "That isn't a .zip file — drop the zip Siemens sent." : "Nothing was dropped.");
-      return;
-    }
-    onFile(zip);
-  }
-
-  async function onFile(file) {
-    if (!file) return;
+    if (!files.length) return;
     setError(null);
     setStage("reading");
     try {
-      const result = await readKitZip(file);
+      const result = await readKitUpload(files);
       setKit(result);
       const first = result.nameInfo ? findPanelsForKit(panels, result.nameInfo.panelId)[0] : null;
       setBuildId(first?.buildId ?? "");
@@ -89,7 +81,7 @@ export default function KitUploadModal({ onClose, onDone, existingBuildIds, init
     <Modal onClose={stage === "saving" ? () => {} : onClose} widthClass="max-w-2xl">
       <h3 className="text-base font-bold text-ink-900">Add a Siemens kit</h3>
       <p className="text-xs text-ink-500 mt-1 mb-4">
-        Choose the zip Siemens sent for one panel (BOM, drawings and wire list). It's stored in the sandbox only.
+        Add the zip Siemens sent for one panel — or drop the files loose: the BOM (.csv), drawings (PDF or DXF), the wire list (Excel) and anything else that goes with it.
       </p>
 
       {(stage === "pick" || stage === "reading") && (
@@ -102,15 +94,15 @@ export default function KitUploadModal({ onClose, onDone, existingBuildIds, init
           onDrop={(e) => {
             e.preventDefault();
             setDragOver(false);
-            if (stage === "pick") pickFromDrop(e.dataTransfer.files);
+            if (stage === "pick") onFiles(e.dataTransfer.files);
           }}
           className={`block border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors ${
             dragOver ? "border-brand-500 bg-brand-50" : "border-paper-200 hover:border-brand-300"
           }`}
         >
-          <input type="file" accept=".zip,application/zip" className="hidden" disabled={stage === "reading"} onChange={(e) => onFile(e.target.files?.[0])} />
-          <span className="block text-base font-semibold text-ink-800">{stage === "reading" ? "Reading the zip…" : dragOver ? "Drop it here" : "Drag the Siemens .zip here"}</span>
-          {stage === "pick" && <span className="block text-xs text-ink-500 mt-1">or tap here to choose it</span>}
+          <input type="file" multiple className="hidden" disabled={stage === "reading"} onChange={(e) => onFiles(e.target.files)} />
+          <span className="block text-base font-semibold text-ink-800">{stage === "reading" ? "Reading the files…" : dragOver ? "Drop them here" : "Drag the Siemens .zip or files here"}</span>
+          {stage === "pick" && <span className="block text-xs text-ink-500 mt-1">or tap here to choose (zip, PDF, Excel, CSV, DXF — anything)</span>}
         </label>
       )}
 
