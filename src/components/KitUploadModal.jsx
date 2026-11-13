@@ -125,6 +125,14 @@ export default function KitUploadModal({ onClose, onDone, existingBuildIds, init
               {kit.files.filter((f) => f.kind === "drawing").length} drawing sheet(s)
             </p>
             {kit.parsed.notes.length > 0 && <p className="text-ink-500">{kit.parsed.notes.length} build note(s) from Siemens will be shown on the checklist.</p>}
+            {kit.converted?.length > 0 && (
+              <p className="text-good-600">
+                Converted {kit.converted.length} DXF drawing{kit.converted.length === 1 ? "" : "s"} to PDF automatically ({kit.converted.map((c) => c.from).join(", ")}). The original DXF file{kit.converted.length === 1 ? " is" : "s are"} kept too.
+              </p>
+            )}
+            {kit.warnings?.map((w) => (
+              <p key={w} className="text-warn-600">{w}</p>
+            ))}
           </div>
 
           <div>

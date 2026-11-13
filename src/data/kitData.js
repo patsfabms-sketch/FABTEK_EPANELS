@@ -326,6 +326,7 @@ export function classifyZipEntry(path) {
   const ext = (name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase();
   if (ext === "csv") return "bom";
   if (ext === "pdf") return "drawing";
+  if (ext === "dxf") return "dxf"; // converted to a PDF drawing when the zip is read (see kitZip.js)
   if (ext === "xlsx" || ext === "xls") return "wirelist";
   return "ignore";
 }
