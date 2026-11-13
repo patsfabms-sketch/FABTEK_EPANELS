@@ -159,7 +159,7 @@ async function readKitEntries(entries, sourceFileName, nameInfo) {
   const problems = [];
   for (const e of ordered) {
     try {
-      parsed = parseBom(decodeText(await e.async("arraybuffer")));
+      parsed = parseBom(decodeText(await e.async("arraybuffer")), { fileName: baseName(e) });
       bomEntry = e;
       break;
     } catch (err) {

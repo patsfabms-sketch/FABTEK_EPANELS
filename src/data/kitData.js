@@ -43,9 +43,24 @@ function qtyDiff(a, b) {
 // CSV
 // ---------------------------------------------------------------------------
 
+// Siemens BOMs come comma-separated, but some exports are tab- or
+// semicolon-separated. Pick whichever delimiter the header line uses most
+// (ignoring anything inside quotes).
+export function detectDelimiter(text) {
+  const head = String(text ?? "").replace(/^\uFEFF/, "").split(/\r\n|\n|\r/)[0] || "";
+  const counts = { ",": 0, "\t": 0, ";": 0, "|": 0 };
+  let inQ = false;
+  for (const ch of head) {
+    if (ch === '"') inQ = !inQ;
+    else if (!inQ && ch in counts) counts[ch] += 1;
+  }
+  const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+  return best[1] > 0 ? best[0] : ",";
+}
+
 // Minimal RFC-4180-style parser (quotes, doubled quotes, CRLF, BOM char).
-export function parseCsv(text) {
-  const src = String(text ?? "").replace(/^﻿/, "");
+export function parseCsv(text, delimiter = ",") {
+  const src = String(text ?? "").replace(/^\uFEFF/, "");
   const rows = [];
   let row = [];
   let field = "";
@@ -68,7 +83,7 @@ export function parseCsv(text) {
       // descriptions contain bare inch marks (3" WIRE) that must stay text.
       inQuotes = true;
       field = "";
-    } else if (ch === ",") {
+    } else if (ch === delimiter) {
       row.push(field.trim());
       field = "";
     } else if (ch === "\n" || ch === "\r") {
@@ -116,6 +131,13 @@ function noteText(raw) {
 
 const isDecorated = (raw) => /^[\s]*[*#]/.test(String(raw ?? ""));
 
+// "75018093_170_BOM_P3R72481361838C.csv" -> sales order 75018093, item 170.
+export function parseBomFileName(fileName) {
+  const base = String(fileName ?? "").split(/[\\/]/).pop();
+  const m = base.match(/(?:^|_)(\d{6,12})_(\d{1,4})_BOM/i); // tolerates a leading upload prefix
+  return m ? { so: m[1], item: m[2] } : null;
+}
+
 /**
  * Parse a Siemens "BOM" CSV (columns: SO, ITEM, POS, BOM_LEVEL, ITEM_NR, PN,
  * PN_DESCR, ITEM_CATEGORY, QUANTITY, UNIT, ...).
@@ -131,15 +153,37 @@ const isDecorated = (raw) => /^[\s]*[*#]/.test(String(raw ?? ""));
  *  - Identical part numbers appearing in several sub-assemblies are merged
  *    into one line with the total quantity and a breakdown of where it goes.
  */
-export function parseBom(csvText) {
-  const table = parseCsv(csvText);
+export function parseBom(csvText, { fileName = "" } = {}) {
+  const table = parseCsv(csvText, detectDelimiter(csvText));
   if (table.length < 2) throw new Error("The BOM file is empty.");
   const header = table[0].map((h) => h.trim().toUpperCase());
-  const col = (name) => header.indexOf(name);
+  // Siemens has more than one BOM layout. The same field can be called
+  // BOM_LEVEL or Level, PN or MM, PN_DESCR or MM_DESCR, ITEM_CATEGORY or
+  // ItemCat, QUANTITY or Q. Each name below is looked up through its aliases.
+  const ALIASES = {
+    BOM_LEVEL: ["BOM_LEVEL", "LEVEL"],
+    PN: ["PN", "MM", "MATERIAL"],
+    PN_DESCR: ["PN_DESCR", "MM_DESCR", "DESCRIPTION"],
+    QUANTITY: ["QUANTITY", "Q", "QTY"],
+    UNIT: ["UNIT", "UOM"],
+    ITEM_CATEGORY: ["ITEM_CATEGORY", "ITEMCAT"],
+  };
+  const colIdx = {};
+  const col = (name) => {
+    if (!(name in colIdx)) colIdx[name] = (ALIASES[name] || [name]).map((a) => header.indexOf(a)).find((i) => i >= 0) ?? -1;
+    return colIdx[name];
+  };
   for (const need of ["BOM_LEVEL", "PN", "PN_DESCR", "QUANTITY", "UNIT"]) {
-    if (col(need) < 0) throw new Error(`This doesn't look like a Siemens BOM — no ${need} column.`);
+    if (col(need) < 0) {
+      throw new Error(
+        `This doesn't look like a Siemens BOM — no ${ALIASES[need].join(" / ")} column (found: ${header.filter(Boolean).slice(0, 12).join(", ") || "nothing"}).`
+      );
+    }
   }
   const cell = (r, name) => (col(name) >= 0 ? String(r[col(name)] ?? "").trim() : "");
+  // Some layouts carry no SO / ITEM columns; the sales order and item are then
+  // in the file name: "75018093_170_BOM_P3R72481361838C.csv".
+  const fromName = parseBomFileName(fileName);
 
   const rows = table.slice(1).map((r, i) => {
     const level = cell(r, "BOM_LEVEL");
@@ -182,8 +226,8 @@ export function parseBom(csvText) {
 
   const top = rows.find((r) => r.depth === 1 && !r.isNote) || rows.find((r) => !r.isNote) || rows[0];
   const meta = {
-    so: top?.so || rows[0]?.so || "",
-    item: top?.item || rows[0]?.item || "",
+    so: top?.so || rows[0]?.so || fromName?.so || "",
+    item: top?.item || rows[0]?.item || fromName?.item || "",
     topPn: top?.pn || "",
     topDescription: top?.desc || "",
     rowCount: rows.length,
@@ -211,10 +255,31 @@ export function parseBom(csvText) {
     if (row.isNote) {
       const prev = rows[i - 1];
       const ref = designatorText(row.pnRaw);
-      if (ref && prev && !prev.isNote && prev.isLeaf && prev.desc && prev.unit === "EA") {
-        const line = merged.get(`${prev.pn}||${prev.unit}`);
-        if (line && !line.refs.includes(ref)) line.refs.push(ref);
-        return;
+      if (ref && prev && !prev.isNote) {
+        // The mark names the thing printed just above it. When that is a single
+        // part it labels that part. When the mark sits at a shallower level than
+        // the part above it (it follows an assembly's children), it names the
+        // whole assembly, so every part under that assembly gets the mark.
+        let target = prev;
+        if (row.depth < prev.depth) {
+          let j = i - 1;
+          while (j >= 0 && !(rows[j].depth === row.depth && !rows[j].isNote)) j--;
+          if (j >= 0) target = rows[j];
+        }
+        const targets = [];
+        if (target.isLeaf) targets.push(target);
+        else {
+          for (let k = target.idx + 1; k < rows.length && rows[k].depth > target.depth; k++) if (!rows[k].isNote && rows[k].isLeaf) targets.push(rows[k]);
+        }
+        let attached = 0;
+        for (const t of targets) {
+          if (!t.desc || t.unit !== "EA") continue;
+          const line = merged.get(`${t.pn}||${t.unit}`);
+          if (!line) continue;
+          if (!line.refs.includes(ref)) line.refs.push(ref);
+          attached += 1;
+        }
+        if (attached) return;
       }
       const text = noteText(row.pnRaw);
       if (!text || /no picture/i.test(text)) {
@@ -327,7 +392,7 @@ export function classifyZipEntry(path, { keepUnknown = false } = {}) {
   if (!name || name.startsWith(".") || name.startsWith("~$") || /^(thumbs\.db|desktop\.ini)$/i.test(name)) return "ignore";
   if (/(^|\/)__MACOSX\//.test(path)) return "ignore";
   const ext = (name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase();
-  if (ext === "csv") return "bom";
+  if (ext === "csv" || ext === "tsv") return "bom";
   if (ext === "pdf") return "drawing";
   if (ext === "dxf") return "dxf"; // converted to a PDF drawing when the upload is read (see kitZip.js)
   if (ext === "xlsx" || ext === "xls") return "wirelist";
